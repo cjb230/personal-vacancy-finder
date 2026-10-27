@@ -57,3 +57,13 @@ python -m vacancy_finder.probe --file seeds/candidates.txt
 Check each hit's job count looks right before adding it, since a common name can match a different company.
 
 If one company's feed fails, its postings are left open rather than closed, and the run carries on with the rest.
+
+### Just Join IT
+
+justjoin.it's robots.txt disallows its API, so the collector reads only what the site offers crawlers: the sitemap of active adverts and each advert's page. To stay polite it opens only adverts whose URL contains a role keyword (`JUSTJOINIT_KEYWORDS`), only re-opens an advert when its sitemap date changes, waits `JUSTJOINIT_DELAY_SECONDS` between pages, and opens at most `JUSTJOINIT_MAX_PAGES` per run. The first runs work through the backlog; after that each run fetches only new or changed adverts.
+
+Adverts written in Polish are stored with `language = 'pl'` so they aren't re-fetched, and are left out at the matching stage.
+
+To check the parser against the live site: `python -m vacancy_finder.collectors.justjoinit 5`.
+
+No Fluff Jobs disallows automated access to both its API and its advert pages, so it will be covered through its email alerts instead.
