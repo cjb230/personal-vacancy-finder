@@ -231,13 +231,16 @@ def test_split_hn_first_line_keeps_links_notes_and_language_needs():
         "Hestus (YC W25) | ML Engineer | https://hestus.co/jobs | YC-funded | German C1+ required")
     assert fields["links"] == ["https://hestus.co/jobs"]
     assert fields["notes"] == ["YC W25", "YC-funded"]
+    schedule = split_hn_first_line("Hiya | Senior Backend Engineer | Seattle, WA | 3 days/week in office")
+    assert (schedule["places"], schedule["notes"]) == (["Seattle, WA"], ["3 days/week in office"])
     assert fields["language_requirement"] == "German C1+ required"
 
 
 def test_hn_title_falls_back_to_first_line_without_a_role():
     p = HackerNewsHiringCollector().parse(
         {"id": 1, "created_at": None, "text": "Shepherd (Series B) | ONSITE | San Francisco, CA<p>About us"})
-    assert p.title == "Shepherd (Series B) | ONSITE | San Francisco, CA"
+    assert p.title == "Open roles (see post)"
+    assert p.company_name == "Shepherd"
     assert p.work_mode == "onsite"
 
 

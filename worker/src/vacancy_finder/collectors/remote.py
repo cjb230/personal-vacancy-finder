@@ -299,7 +299,7 @@ _HN_LANGUAGE_NEED = re.compile(
 )
 _HN_NOTE = re.compile(
     r"\b(yc|y combinator|series [a-e]|seed|funded|backed|visa|sponsorship|relocation|"
-    r"equity|benefits|profitable|founded)\b", re.I
+    r"equity|benefits|profitable|founded)\b|days?\s*/\s*(week|wk|month)|days a week", re.I
 )
 _HN_ROLE = re.compile(
     r"engineer|developer|manager|lead|director|head|architect|scientist|designer|cto|vp\b"
@@ -446,7 +446,9 @@ class HackerNewsHiringCollector(FeedCollector):
         return RawPosting(
             external_id=str(comment["id"]),
             url=f"https://news.ycombinator.com/item?id={comment['id']}",
-            title=(fields["role"] or first_line)[:200] or "(untitled)",
+            # No recognisable role: a neutral title rather than the raw line, which would
+            # also make every such post look unique to de-duplication.
+            title=(fields["role"] or "Open roles (see post)")[:200],
             company_name=(fields["company"] or "(unknown)")[:200],
             location_text=" | ".join(fields["places"])[:300] or None,
             work_mode=guess_work_mode(first_line),
