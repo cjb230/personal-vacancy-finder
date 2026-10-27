@@ -34,6 +34,13 @@ services:
       HIMALAYAS_QUERIES: ${HIMALAYAS_QUERIES:-}
       HIMALAYAS_MAX_PAGES: ${HIMALAYAS_MAX_PAGES:-5}
       ARBEITNOW_MAX_PAGES: ${ARBEITNOW_MAX_PAGES:-10}
+      IMAP_HOST: ${IMAP_HOST:-imap.mail.me.com}
+      IMAP_PORT: ${IMAP_PORT:-993}
+      IMAP_USER: ${IMAP_USER:-}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:-}
+      IMAP_FOLDER: ${IMAP_FOLDER:-INBOX}
+      IMAP_TRASH_FOLDER: ${IMAP_TRASH_FOLDER:-Deleted Messages}
+      EMAIL_ALERT_DAYS: ${EMAIL_ALERT_DAYS:-30}
       WEB_HOST: 0.0.0.0  # inside the container; published on 127.0.0.1 only, below
     ports:
       # The results page, on this machine only: http://localhost:8080
