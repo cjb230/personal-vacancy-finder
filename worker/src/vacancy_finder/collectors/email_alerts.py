@@ -92,12 +92,23 @@ def to_stored(raw: bytes, uid: int | None = None) -> StoredMessage:
     )
 
 
+def check_login_alert(login_data: list, untagged: dict) -> None:
+    """Some servers accept the login but refuse everything after it with an [ALERT], e.g.
+    Interia until IMAP access is switched on in its settings. Fail clearly instead of hanging."""
+    lines = [*login_data, *(line for values in untagged.values() for line in values)]
+    for line in lines:
+        text = line.decode(errors="replace") if isinstance(line, bytes) else str(line)
+        if "[ALERT]" in text.upper():
+            raise RuntimeError(f"IMAP server refused access after login: {text}")
+
+
 def fetch_new(settings: ImapSettings, known_uids: Callable[[int], set[int]], since: datetime,
               limit: int | None = None) -> tuple[int, list[StoredMessage]]:
     """Messages since `since` whose UIDs aren't known yet, at most the newest `limit`.
     Returns (uidvalidity, messages)."""
-    with imaplib.IMAP4_SSL(settings.host, settings.port) as imap:
-        imap.login(settings.user, settings.password)
+    with imaplib.IMAP4_SSL(settings.host, settings.port, timeout=60) as imap:
+        _, data = imap.login(settings.user, settings.password)
+        check_login_alert(data, imap.untagged_responses)
         status, _ = imap.select(settings.folder, readonly=True)
         if status != "OK":
             raise RuntimeError(f"cannot open folder {settings.folder!r}")

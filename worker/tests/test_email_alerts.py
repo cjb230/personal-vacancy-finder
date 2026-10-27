@@ -58,6 +58,14 @@ def test_unknown_sender_gives_no_postings():
     assert parse_message(msg) == []
 
 
+def test_login_alert_is_an_error():
+    from vacancy_finder.collectors.email_alerts import check_login_alert
+
+    check_login_alert([b"LOGIN completed"], {"CAPABILITY": [b"IMAP4rev1"]})
+    with pytest.raises(RuntimeError, match="enable IMAP access"):
+        check_login_alert([b"[ALERT] Please enable IMAP access in your account settings first."], {})
+
+
 def test_off_without_credentials(monkeypatch):
     monkeypatch.delenv("IMAP_USER", raising=False)
     monkeypatch.delenv("IMAP_PASSWORD", raising=False)
