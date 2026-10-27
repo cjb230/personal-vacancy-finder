@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<workzag-jobs>
+  <position>
+    <id>1234567</id>
+    <subcompany>Acme GmbH</subcompany>
+    <office>Berlin (Remote)</office>
+    <department>Engineering</department>
+    <recruitingCategory>Engineering</recruitingCategory>
+    <name>Engineering Manager, Geospatial Platform</name>
+    <jobDescriptions>
+      <jobDescription>
+        <name>Your mission</name>
+        <value><![CDATA[<p>Lead a team building <strong>satellite</strong> analytics.</p><ul><li>Python</li><li>PostgreSQL</li></ul>]]></value>
+      </jobDescription>
+    </jobDescriptions>
+    <employmentType>permanent</employmentType>
+    <seniority>experienced</seniority>
+    <schedule>full-time</schedule>
+    <yearsOfExperience>5-7</yearsOfExperience>
+    <keywords>python,gis</keywords>
+    <occupation>software_and_web_development</occupation>
+    <occupationCategory>it_software</occupationCategory>
+    <createdAt>2026-10-02T09:15:00+00:00</createdAt>
+  </position>
+  <position>
+    <id>7654321</id>
+    <office>Munich</office>
+    <name>Working Student R&amp;D</name>
+    <jobDescriptions></jobDescriptions>
+    <employmentType>working_student</employmentType>
+    <createdAt>2026-09-20T12:00:00+00:00</createdAt>
+  </position>
+</workzag-jobs>

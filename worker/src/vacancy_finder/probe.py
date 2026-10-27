@@ -10,9 +10,21 @@ import csv
 import re
 import sys
 
+import xml.etree.ElementTree as ET
+
 import httpx
 
 from .collectors.ats import ATS_COLLECTORS, USER_AGENT, TrackedCompany
+from .collectors.more_ats import PersonioCollector, RecruiteeCollector, TraffitCollector
+
+# Each feed to try, with how a slug guess becomes that feed's ats_slug.
+# Teamtailor and plain careers pages live on the company's own domain, so can't be guessed.
+PROBES = [(c, lambda slug: slug) for c in ATS_COLLECTORS] + [
+    (RecruiteeCollector(), lambda slug: slug),
+    (TraffitCollector(), lambda slug: slug),
+    (PersonioCollector(), lambda slug: f"{slug}.jobs.personio.de"),
+    (PersonioCollector(), lambda slug: f"{slug}.jobs.personio.com"),
+]
 from .normalize import normalize_company
 
 
@@ -34,7 +46,9 @@ def candidate_slugs(name: str) -> list[str]:
 def count_jobs(payload) -> int:
     if isinstance(payload, list):
         return len(payload)
-    return len(payload.get("jobs", []))
+    if isinstance(payload, ET.Element):
+        return len(payload.findall("position"))
+    return len(payload.get("jobs") or payload.get("offers") or [])
 
 
 def check_parse(collector, payload, name: str, slug: str) -> str:
@@ -51,13 +65,14 @@ def check_parse(collector, payload, name: str, slug: str) -> str:
 
 def probe(client: httpx.Client, name: str, extra_slugs: list[str]) -> list[tuple[str, str, int, str]]:
     hits = []
-    for collector in ATS_COLLECTORS:
-        for slug in extra_slugs + candidate_slugs(name):
+    for collector, to_ats_slug in PROBES:
+        for guess in extra_slugs + candidate_slugs(name):
+            slug = to_ats_slug(guess)
             try:
                 payload = collector.fetch(client, slug)
             except (httpx.HTTPError, ValueError):
                 continue
-            if isinstance(payload, dict) and "jobs" not in payload:
+            if isinstance(payload, dict) and "jobs" not in payload and "offers" not in payload:
                 continue
             # Workable and Ashby answer made-up slugs with an empty board rather than a 404,
             # so an empty board is not evidence of a match.
@@ -90,7 +105,7 @@ def main() -> None:
                 print(f"# {name}: no ATS feed found", file=sys.stderr)
             for kind, slug, jobs, check in hits:
                 print(f"# {name}: {kind}/{slug} has {jobs} open jobs; {check}", file=sys.stderr)
-                out.writerow([name, "", kind, slug, "", ""])
+                out.writerow([name, "", kind, slug, "", "", "", ""])
 
 
 if __name__ == "__main__":

@@ -78,3 +78,24 @@ def test_run_fails_when_every_company_fails(conn, tmp_path):  # noqa: F811
         "SELECT status, error FROM collection_runs ORDER BY id DESC LIMIT 1"
     ).fetchone()
     assert status == "failed" and "every greenhouse company failed" in error
+
+
+def test_careers_page_company_end_to_end(conn, tmp_path):  # noqa: F811
+    from vacancy_finder.collectors.page import PageCollector
+
+    path = tmp_path / "companies.csv"
+    path.write_text(
+        "name,sectors,ats_kind,ats_slug,website,notes,careers_url,link_pattern\n"
+        "KP Labs,space,page,https://www.kplabs.space/career,,,"
+        "https://www.kplabs.space/career,^/jobs/[^/?#]+$\n"
+    )
+    load_companies(conn, path)
+    assert conn.execute("SELECT tracked, careers_url, link_pattern FROM companies").fetchone() == (
+        True, "https://www.kplabs.space/career", "^/jobs/[^/?#]+$"
+    )
+    page = (Path(__file__).parent / "fixtures" / "page_kplabs.html").read_text()
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=page)))
+    run_collector(conn, PageCollector(client))
+    assert conn.execute("SELECT title FROM jobs ORDER BY title").fetchall() == [
+        ("Accounting Specialist",), ("Head of Thermal and Mechanical Engineering",)
+    ]

@@ -1,17 +1,28 @@
-name,sectors,ats_kind,ats_slug,website,notes
-ICEYE,space;earth-observation,ashby,iceye,https://www.iceye.com,SAR satellites; has a Polish office
-Planet Labs,space;earth-observation,greenhouse,planetlabs,https://www.planet.com,
-Isar Aerospace,space;launch,greenhouse,isaraerospace,https://www.isaraerospace.com,
-The Exploration Company,space,ashby,the-exploration-company,https://www.exploration.space,
-Spire Global,space;earth-observation;weather,greenhouse,spire,https://spire.com,
-Loft Orbital,space,lever,loftorbital,https://www.loftorbital.com,
-Enpal,green-tech;energy,ashby,enpal,https://www.enpal.de,
-1Komma5,green-tech;energy,workable,1komma5grad,https://1komma5.com,
-Modo Energy,energy-markets,greenhouse,modoenergy,https://modoenergy.com,
-Exotec,robotics,workable,exotec,https://www.exotec.com,
-Agile Robots,robotics,workable,agile-robots,https://www.agile-robots.com,
-RobCo,robotics,ashby,robco,https://www.robco.de,
-Docplanner,health,ashby,docplanner,https://www.docplanner.com,Polish origin
-Preply,edtech,ashby,preply,https://preply.com,
-Babbel,edtech,ashby,babbel,https://www.babbel.com,
-Brainly,edtech,ashby,brainly,https://brainly.com,Polish origin
+name,sectors,ats_kind,ats_slug,website,notes,careers_url,link_pattern
+ICEYE,space;earth-observation,ashby,iceye,https://www.iceye.com,SAR satellites; has a Polish office,,
+Planet Labs,space;earth-observation,greenhouse,planetlabs,https://www.planet.com,,,
+Isar Aerospace,space;launch,greenhouse,isaraerospace,https://www.isaraerospace.com,,,
+The Exploration Company,space,ashby,the-exploration-company,https://www.exploration.space,,,
+Spire Global,space;earth-observation;weather,greenhouse,spire,https://spire.com,,,
+Loft Orbital,space,lever,loftorbital,https://www.loftorbital.com,,,
+Enpal,green-tech;energy,ashby,enpal,https://www.enpal.de,,,
+1Komma5,green-tech;energy,workable,1komma5grad,https://1komma5.com,,,
+Modo Energy,energy-markets,greenhouse,modoenergy,https://modoenergy.com,,,
+Exotec,robotics,workable,exotec,https://www.exotec.com,,,
+Agile Robots,robotics,workable,agile-robots,https://www.agile-robots.com,,,
+RobCo,robotics,ashby,robco,https://www.robco.de,,,
+Docplanner,health,ashby,docplanner,https://www.docplanner.com,Polish origin,,
+Preply,edtech,ashby,preply,https://preply.com,,,
+Babbel,edtech,ashby,babbel,https://www.babbel.com,,,
+Brainly,edtech,ashby,brainly,https://brainly.com,Polish origin,,
+Constellr,space;earth-observation;climate,greenhouse,constellrgmbh,https://www.constellr.com,Thermal imaging satellites,,
+Nomagic,robotics,lever,Nomagic,https://nomagic.ai,Polish origin; Lever slug is case-sensitive,,
+LiveEO,space;earth-observation,personio,liveeo-gmbh.jobs.personio.de,https://www.live-eo.com,,,
+OroraTech,space;earth-observation,personio,ororatech.jobs.personio.com,https://ororatech.com,Wildfire detection from orbit,,
+UP42,space;earth-observation;gis,recruitee,up42gmbh,https://up42.com,Geospatial data marketplace,,
+CloudFerro,space;earth-observation,traffit,cloudferro,https://cloudferro.com,Polish; cloud for EO data,,
+Tibber,energy;green-tech,teamtailor,jobs.tibber.com,https://tibber.com,,,
+Sener,space;engineering,teamtailor,www.engineering-jobs.sener/en,https://www.group.sener,Has a Polish office; feed lists all countries,,
+KP Labs,space,page,https://www.kplabs.space/career,https://www.kplabs.space,Polish; onboard AI for satellites,https://www.kplabs.space/career,^/jobs/[^/?#]+$
+Creotech Instruments,space,page,https://creotech.pl/en/career,https://creotech.pl,Polish; satellites and electronics,https://creotech.pl/en/career,^/en/job-offers/[^/?#]+$
+PIAP Space,space;robotics,page,https://piap.space/job-openings/,https://piap.space,Polish; space robotics,https://piap.space/job-openings/,^https://piap\.space/jobs/[^?#]+/$

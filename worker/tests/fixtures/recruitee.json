@@ -1,0 +1,16 @@
+{"offers": [
+  {"id": 901, "slug": "head-of-engineering", "status": "published", "title": "Head of Engineering",
+   "careers_url": "https://acme.recruitee.com/o/head-of-engineering",
+   "city": "Berlin", "country": "Germany", "country_code": "DE",
+   "remote": true, "hybrid": false, "on_site": false,
+   "description": "<p>Lead our EO data platform.</p>", "requirements": "<ul><li>Python</li></ul>",
+   "published_at": "2026-10-05 14:00:00 UTC", "employment_type_code": "fulltime_permanent",
+   "experience_code": "experienced", "category_code": "it",
+   "salary": {"min": "90000", "max": "120000", "period": "year", "currency": "EUR"},
+   "locations": [{"city": "Berlin", "country": "Germany"}, {"city": "Warsaw", "country": "Poland"}]},
+  {"id": 902, "slug": "office-manager", "status": "published", "title": "Office Manager",
+   "careers_url": null, "city": "Berlin", "country": "Germany",
+   "remote": false, "hybrid": false, "on_site": true,
+   "description": "", "requirements": "", "published_at": "2026-09-01 08:00:00 UTC",
+   "salary": {"min": null, "max": null, "period": null, "currency": "EUR"}, "locations": []}
+]}

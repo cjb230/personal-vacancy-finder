@@ -10,7 +10,7 @@ from .normalize import normalize_company
 
 log = logging.getLogger(__name__)
 
-COLUMNS = ["name", "sectors", "ats_kind", "ats_slug", "website", "notes"]
+COLUMNS = ["name", "sectors", "ats_kind", "ats_slug", "website", "notes", "careers_url", "link_pattern"]
 
 
 def load_companies(conn: psycopg.Connection, path: Path) -> int:
@@ -26,8 +26,9 @@ def load_companies(conn: psycopg.Connection, path: Path) -> int:
         conn.execute(
             """
             INSERT INTO companies
-                (name, normalized_name, sectors, ats_kind, ats_slug, website, notes, tracked)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (name, normalized_name, sectors, ats_kind, ats_slug, website, notes, tracked,
+                 careers_url, link_pattern)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (normalized_name) DO UPDATE SET
                 name = EXCLUDED.name,
                 sectors = EXCLUDED.sectors,
@@ -35,7 +36,9 @@ def load_companies(conn: psycopg.Connection, path: Path) -> int:
                 ats_slug = COALESCE(EXCLUDED.ats_slug, companies.ats_slug),
                 website = COALESCE(EXCLUDED.website, companies.website),
                 notes = COALESCE(EXCLUDED.notes, companies.notes),
-                tracked = EXCLUDED.tracked OR companies.tracked
+                tracked = EXCLUDED.tracked OR companies.tracked,
+                careers_url = COALESCE(EXCLUDED.careers_url, companies.careers_url),
+                link_pattern = COALESCE(EXCLUDED.link_pattern, companies.link_pattern)
             """,
             (
                 row["name"].strip(),
@@ -46,6 +49,8 @@ def load_companies(conn: psycopg.Connection, path: Path) -> int:
                 row["website"].strip() or None,
                 row["notes"].strip() or None,
                 bool(ats_kind and ats_slug),
+                (row.get("careers_url") or "").strip() or None,
+                (row.get("link_pattern") or "").strip() or None,
             ),
         )
     conn.commit()
