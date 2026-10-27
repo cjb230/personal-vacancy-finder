@@ -102,3 +102,46 @@ def test_required_languages_from_sources():
     assert required_languages("justjoinit", {"offer": {"languages": [{"code": "pl"}, {"code": "en"}]}}) == {"pl", "en"}
     assert required_languages("hn-whoishiring", {"language_requirement": "German C1+ required"}) == {"de"}
     assert required_languages("greenhouse", {}) == set()
+
+
+def test_benefit_words_dont_count_as_sector():
+    text = "Python and PostgreSQL. A leader in this space, with health insurance and an education budget."
+    reasons = score_job(job("Staff Software Engineer", description=text)).reasons
+    assert not any("space" in r or "energy" in r for r in reasons)
+    assert "space / satellite / GIS work (+15)" in score_job(job(
+        "Staff Software Engineer", description="Python for our Earth observation satellites.")).reasons
+
+
+def test_bank_vp_grade_is_not_director():
+    assert score_job(job("Python Credit Risk Senior Developer - VP")).role_level == "senior"
+    assert score_job(job("Product Management Director")).verdict == "no"
+
+
+def test_multi_role_hn_post_judged_on_engineering_role():
+    result = score_job(job("Director of Corp Dev · Product Marketing Associate · MLOps Engineer"))
+    assert result.role_level == "other"
+
+
+def test_region_limit_in_title():
+    result = score_job(job("Data Engineering Tech Lead (LatAm Only)", locations=("Anywhere",)))
+    assert result.verdict == "no"
+
+
+def test_unknown_mode_abroad_is_probably_onsite():
+    reasons = score_job(job("Staff Software Engineer", modes=("unknown",),
+                            locations=("Parsdorf, Bavaria",))).reasons
+    assert "in Parsdorf, Bavaria, work mode not stated: probably on-site (-10)" in reasons
+
+
+def test_senior_and_non_software_roles_capped_at_maybe():
+    senior = score_job(job("Senior Python Engineer", sectors=["space"], pay=Decimal(40000)))
+    assert senior.verdict == "maybe"
+    propulsion = score_job(job("Principal Propulsion Engineer", sectors=["space"]))
+    assert propulsion.verdict == "maybe"
+    architect = score_job(job("Space Mission Architect", description=None, modes=("unknown",),
+                              locations=("Warsaw",), sectors=["space"]))
+    assert architect.verdict == "match"
+
+
+def test_content_systems_is_engineering():
+    assert score_job(job("Senior Principal Engineer - AI Content Systems")).verdict != "no"

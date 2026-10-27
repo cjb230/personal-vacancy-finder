@@ -208,14 +208,20 @@ class Handler(BaseHTTPRequestHandler):
         log.debug("web: " + format, *args)
 
 
+def address(port: int | None = None) -> tuple[str, int]:
+    # Local-only unless told otherwise: the page can change data and has no login.
+    # docker-compose sets WEB_HOST=0.0.0.0 inside the container and publishes it on 127.0.0.1.
+    return os.environ.get("WEB_HOST", "127.0.0.1"), port or int(os.environ.get("WEB_PORT", "8080"))
+
+
 def serve(port: int | None = None) -> ThreadingHTTPServer:
-    port = port or int(os.environ.get("WEB_PORT", "8080"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    host, port = address(port)
+    server = ThreadingHTTPServer((host, port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True, name="web").start()
-    log.info("Results page on port %d", port)
+    log.info("Results page on %s:%d", host, port)
     return server
 
 
 if __name__ == "__main__":
     logging.basicConfig(level="INFO")
-    ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("WEB_PORT", "8080"))), Handler).serve_forever()
+    ThreadingHTTPServer(address(), Handler).serve_forever()

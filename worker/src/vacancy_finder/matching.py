@@ -44,16 +44,27 @@ NON_ENGINEERING = _rx(
     r"|teacher|tutor|intern|internship|working student|werkstudent|praktikum|apprentice|junior"
     r"|trainee|graduate|technician|mechanic|electrician|welder|operator|assembler|warehouse"
     r"|driver|cleaner|cook|chef|barista|sales engineer|pre-?sales|solutions consultant"
-    r"|product marketing|growth|seo|content|community|social media|executive assistant)\b"
+    r"|product marketing|seo|community manager|social media|executive assistant"
+    r"|product manag\w*|delivery manag\w*|project manag\w*|program manag\w*|facilit\w*|estates"
+    r"|field engineering|gtm|go-to-market|qa|quality assurance|test automation|tester)\b"
 )
 ENGINEERING = _rx(
     r"engineer|developer|software|programm|data|platform|backend|back-end|infrastructure|devops"
     r"|\bsre\b|architect|technical|technology|engineering|\bcto\b|\bml\b|machine learning|python"
-    r"|\bai\b|cloud|systems|geospatial|\bgis\b"
+    r"|\bai\b|cloud|system|geospatial|\bgis\b|tech\b"
 )
+# Software work specifically, as opposed to e.g. propulsion or structural engineering.
+SOFTWARE = _rx(
+    r"software|developer|data|platform|backend|back-end|full[- ]?stack|infrastructure|devops"
+    r"|\bsre\b|cloud|python|\bml\b|machine learning|\bai\b|systems|architect|engineering manager"
+    r"|engineering (lead|director)|head of (engineering|technology|software|data|platform)|\bcto\b"
+    r"|technology|technical lead|tech lead|flight software|ground segment|geospatial|\bgis\b"
+)
+# Bank titles such as "Senior Developer - VP" or "AVP" are grades for individual roles.
+BANK_GRADE = _rx(r"(-|,|–)\s*(a?vp|svp)\s*$|\bavp\b")
 ROLE_TIERS = [
     ("director", 35, _rx(
-        r"\b(director|head of|vp\b|vice president|cto|chief technology)\b")),
+        r"\b(director|head of|vp|vice president|cto|chief technology)\b")),
     ("manager", 30, _rx(
         r"engineering manager|eng\.? manager|manager,? (software|engineering|data|platform|backend)"
         r"|(software|development|data|platform|backend|engineering) manager|team lead|tech lead"
@@ -93,18 +104,28 @@ POLAND = _rx(r"poland|polska|\bpl\b|krak[oó]w|wroc[lł]aw|gda[nń]sk|pozna[nń]
 EUROPE_OK = _rx(r"europe|\beu\b|emea|\bcet\b|cest|poland|worldwide|anywhere|global|international")
 REMOTE_ELSEWHERE_ONLY = _rx(
     r"\b(us|usa|u\.s\.|united states|north america|canada|latam|latin america|south america|apac"
-    r"|asia|australia|new zealand|india|brazil|mexico|philippines|uk only|us[- ]based"
-    r"|(us|pst|est|pacific|eastern) time ?zones?)\b"
+    r"|asia|australia|new zealand|india|brazil|mexico|philippines|uk only|us[- ]based|latam only"
+    r"|(us|pst|est|pacific|eastern) time ?zones?|pst|pacific time)\b"
 )
 
 # --- sectors ---------------------------------------------------------------------------------
 
 TOP_SECTORS = {"space", "earth-observation", "gis"}
 GOOD_SECTORS = {"energy", "energy-markets", "green-tech", "climate", "health", "edtech", "robotics"}
+# Title and company name: a bare "space" or "health" there means the work itself.
 SPACE_WORDS = _rx(r"\bspace\b|satellite|earth observation|geospatial|\bgis\b|remote sensing"
-                  r"|orbit|aerospace|\bsar\b|imagery")
+                  r"|orbit|aerospace|spacecraft|\bsar\b|flight software|ground segment")
 GOOD_WORDS = _rx(r"\benergy\b|power grid|\bgrid\b|solar|battery|batteries|renewable|climate"
-                 r"|carbon|robot\w*|health\w*|medical|clinical|edtech|education|learning platform")
+                 r"|carbon|robot\w*|health\w*|medical|clinical|edtech|education|learning")
+# Descriptions mention "this space", "office space", "health insurance" and "education budget",
+# so they only count with phrases that are about the business itself.
+SPACE_PHRASES = _rx(r"satellites?\b(?! office)|earth observation|geospatial|remote sensing"
+                    r"|spacecraft|space (industry|sector|company|mission|systems|technology|tech)"
+                    r"|new ?space\b|\bgis\b|launch vehicle|in-orbit")
+GOOD_PHRASES = _rx(r"energy (company|market|trading|transition|storage|sector)|renewable energy"
+                   r"|solar (energy|power|panels?)|battery storage|climate tech|cleantech|green tech"
+                   r"|health ?tech|digital health|medtech|healthcare (company|platform|provider)"
+                   r"|edtech|learning platform|robotics (company|platform)|industrial robots?")
 EXCLUDED_WORDS = _rx(r"tobacco|nicotine|vaping|\bvape\b|casino|gambling|betting|igaming"
                      r"|sportsbook|free-to-play|\bf2p\b|slot games")
 
@@ -162,18 +183,21 @@ def score_job(job: JobFacts) -> Score:
     elif match := OTHER_LANGUAGE_NEEDED.search(text):
         blockers.append(f"asks for another language (\"{match.group(0).strip()}\")")
 
-    # Role level, from the title.
+    # Role level, from the title. A post listing several roles ("Director of Corp Dev ·
+    # MLOps Engineer") is judged on its engineering one.
+    parts = [p for p in re.split(r"\s+[·•|]\s+", title) if p]
+    role_title = next((p for p in parts if ENGINEERING.search(p)), title) if len(parts) > 1 else title
     role_level = "other"
     for level, bonus, pattern in ROLE_TIERS:
-        if pattern.search(title):
+        if level == "director" and (BANK_GRADE.search(role_title)
+                                    or not ENGINEERING.search(role_title)):
+            continue
+        if pattern.search(role_title):
             role_level = level
             points += bonus
             reasons.append(f"{level}-level role (+{bonus})")
             break
-    if NON_ENGINEERING.search(title) and not (role_level in ("director", "manager")
-                                              and ENGINEERING.search(title)):
-        blockers.append("not an engineering role")
-    elif not ENGINEERING.search(title) and not (role_level == "director" and ENGINEERING.search(text)):
+    if NON_ENGINEERING.search(role_title) or not ENGINEERING.search(role_title):
         blockers.append("not an engineering role")
     if role_level == "director" and DIRECTOR_EXPERIENCE.search(text):
         points -= 20
@@ -196,12 +220,15 @@ def score_job(job: JobFacts) -> Score:
     # Location and work mode.
     place = " | ".join(job.locations)
     modes = job.work_modes - {"unknown"} or {"unknown"}
+    if REMOTE_ELSEWHERE_ONLY.search(title) and not EUROPE_OK.search(title):
+        blockers.append(f"limited to another region (\"{title}\")")
     if "remote" in modes:
-        if EUROPE_OK.search(place) or WARSAW.search(place) or POLAND.search(place):
+        if REMOTE_ELSEWHERE_ONLY.search(place) and not (EUROPE_OK.search(place)
+                                                        or POLAND.search(place)):
+            blockers.append(f"remote only within {place}")
+        elif EUROPE_OK.search(place) or WARSAW.search(place) or POLAND.search(place):
             points += 15
             reasons.append("remote, Europe/Poland OK (+15)")
-        elif REMOTE_ELSEWHERE_ONLY.search(place):
-            blockers.append(f"remote only within {place}")
         else:
             points += 5
             reasons.append("remote, region not stated (+5)")
@@ -220,11 +247,17 @@ def score_job(job: JobFacts) -> Score:
             reasons.append("on-site in Warsaw (-5)")
         else:
             blockers.append(f"on-site in {place or 'unknown place'}")
-    elif WARSAW.search(place) or POLAND.search(place):
+    elif WARSAW.search(place):
+        points += 10
+        reasons.append("in Warsaw, work mode not stated (+10)")
+    elif POLAND.search(place):
         points += 3
-        reasons.append(f"in {place}, work mode unknown (+3)")
+        reasons.append(f"in {place}, work mode not stated (+3)")
     elif place and REMOTE_ELSEWHERE_ONLY.search(place) and not EUROPE_OK.search(place):
         blockers.append(f"located in {place}")
+    elif place and not EUROPE_OK.search(place):
+        points -= 10
+        reasons.append(f"in {place}, work mode not stated: probably on-site (-10)")
 
     # Sector.
     sectors = set(job.company_sectors)
@@ -233,13 +266,13 @@ def score_job(job: JobFacts) -> Score:
     if sectors & TOP_SECTORS:
         points += 25
         reasons.append("space / Earth observation company (+25)")
-    elif SPACE_WORDS.search(everything):
+    elif SPACE_WORDS.search(f"{title}\n{job.company or ''}") or SPACE_PHRASES.search(text):
         points += 15
         reasons.append("space / satellite / GIS work (+15)")
     elif sectors & GOOD_SECTORS:
         points += 12
         reasons.append(f"{', '.join(sorted(sectors & GOOD_SECTORS))} company (+12)")
-    elif GOOD_WORDS.search(everything):
+    elif GOOD_WORDS.search(f"{title}\n{job.company or ''}") or GOOD_PHRASES.search(text):
         points += 6
         reasons.append("energy / climate / health / education / robotics (+6)")
 
@@ -256,9 +289,22 @@ def score_job(job: JobFacts) -> Score:
             points -= 15
             reasons.append(f"pay only up to ~{monthly:,} PLN/month (-15)")
 
+    if not text:
+        reasons.append("no description collected: check the advert")
+
     if blockers:
         return Score("no", points, role_level, blockers + reasons)
     verdict = "match" if points >= MATCH else "maybe" if points >= MAYBE else "no"
+    # A match has to be at the level James is after, and software work.
+    space = bool(sectors & TOP_SECTORS) or "space / satellite / GIS work (+15)" in reasons
+    senior_enough = role_level in ("director", "manager", "staff") or (
+        role_level == "architect" and space)
+    if verdict == "match" and not senior_enough:
+        verdict = "maybe"
+        reasons.append(f"{role_level}-level: at most a maybe")
+    elif verdict == "match" and not SOFTWARE.search(role_title):
+        verdict = "maybe"
+        reasons.append("not clearly software work: at most a maybe")
     return Score(verdict, points, role_level, reasons)
 
 
