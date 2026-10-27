@@ -69,6 +69,12 @@ ARBEITNOW = {
 HN_HITS = {"hits": [
     {"objectID": "49922570", "title": "Ask HN: Who wants to be hired? (October 2026)"},
     {"objectID": "49922569", "title": "Ask HN: Who is hiring? (October 2026)"},
+    {"objectID": "49522897", "title": "Ask HN: Who is hiring? (September 2026)"},
+    {"objectID": "49156683", "title": "Ask HN: Who is hiring? (August 2026)"},
+]}
+HN_SEPTEMBER = {"id": 49522897, "title": "Ask HN: Who is hiring? (September 2026)", "children": [
+    {"id": 49522900, "author": "late", "created_at": "2026-10-20T10:00:00.000Z",
+     "text": "Orbital Co | Staff Engineer | Remote (EU)"},
 ]}
 HN_STORY = {
     "id": 49922569, "title": "Ask HN: Who is hiring? (October 2026)",
@@ -166,9 +172,12 @@ def test_hacker_news_picks_hiring_thread_and_parses_first_line():
     client = stub({
         "https://hn.algolia.com/api/v1/search_by_date": HN_HITS,
         "https://hn.algolia.com/api/v1/items/49922569": HN_STORY,
+        "https://hn.algolia.com/api/v1/items/49522897": HN_SEPTEMBER,
+        # August must not be fetched; the stub would 404 and fail the run.
     })
     postings = list(HackerNewsHiringCollector(client, 0).collect(None))
-    assert len(postings) == 1  # the deleted comment is skipped
+    # This month's live post, plus last month's late addition; the deleted comment is skipped.
+    assert [x.external_id for x in postings] == ["49922609", "49522900"]
     p = postings[0]
     assert (p.company_name, p.title) == ("Sidekick Labs", "Senior SWE, R&D Engineer")
     assert p.location_text == "REMOTE (US Timezones) | Full-time | $170k"

@@ -269,22 +269,25 @@ class HackerNewsHiringCollector(FeedCollector):
     source_key = "hn-whoishiring"
     source_name = "Hacker News: Who is hiring?"
     stale_after_days = 45  # a new thread starts each month
+    threads = 2  # the current month's thread and the previous one
     search_url = "https://hn.algolia.com/api/v1/search_by_date"
     item_url = "https://hn.algolia.com/api/v1/items/{id}"
 
     def postings(self, client: httpx.Client) -> Iterator[RawPosting]:
+        # Every run re-reads the threads, so comments added after the 1st are picked up.
+        # The previous month's thread is read too, so late additions to it aren't
+        # missed once the new thread starts.
         hits = self.get(
-            client, self.search_url, tags="story,author_whoishiring", hitsPerPage=6
+            client, self.search_url, tags="story,author_whoishiring", hitsPerPage=9
         ).json()["hits"]
-        thread = next(
-            (h for h in hits if (h.get("title") or "").startswith("Ask HN: Who is hiring?")), None
-        )
-        if thread is None:
+        threads = [h for h in hits if (h.get("title") or "").startswith("Ask HN: Who is hiring?")]
+        if not threads:
             raise ValueError("no 'Who is hiring?' thread found")
-        story = self.get(client, self.item_url.format(id=thread["objectID"])).json()
-        for comment in story.get("children") or []:
-            if comment.get("text"):
-                yield self.parse(comment, story.get("title"))
+        for thread in threads[: self.threads]:
+            story = self.get(client, self.item_url.format(id=thread["objectID"])).json()
+            for comment in story.get("children") or []:
+                if comment.get("text"):
+                    yield self.parse(comment, story.get("title"))
 
     def parse(self, comment: dict[str, Any], thread_title: str | None = None) -> RawPosting:
         text = html_to_text(comment["text"]) or ""
