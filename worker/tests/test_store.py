@@ -33,8 +33,11 @@ class FakeCollector:
         self.source_name = key
         self.postings = postings
 
-    def collect(self):
+    def collect(self, conn):
         yield from self.postings
+
+    def incomplete_company_ids(self):
+        return set()
 
 
 def posting(external_id, company="ICEYE Oy", title="Staff Software Engineer"):
@@ -91,7 +94,7 @@ def test_failed_run_is_recorded_and_closes_nothing(conn):
     run_collector(conn, FakeCollector("board_a", [posting("1")]))
 
     class Broken(FakeCollector):
-        def collect(self):
+        def collect(self, conn):
             raise RuntimeError("site down")
 
     run_collector(conn, Broken("board_a", []))

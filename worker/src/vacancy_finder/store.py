@@ -108,14 +108,22 @@ def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting
     return row[0]
 
 
-def close_unseen(conn: psycopg.Connection, source_id: int, run_started_at: datetime) -> int:
+def close_unseen(
+    conn: psycopg.Connection,
+    source_id: int,
+    run_started_at: datetime,
+    skip_company_ids: set[int] = frozenset(),
+) -> int:
     """Mark postings this source no longer lists as closed, then close jobs with no open postings."""
     closed = conn.execute(
         """
-        UPDATE postings SET closed_at = now()
-        WHERE source_id = %s AND closed_at IS NULL AND last_seen_at < %s
+        UPDATE postings p SET closed_at = now()
+        FROM jobs j
+        WHERE p.job_id = j.id
+          AND p.source_id = %s AND p.closed_at IS NULL AND p.last_seen_at < %s
+          AND (j.company_id IS NULL OR NOT j.company_id = ANY(%s))
         """,
-        (source_id, run_started_at),
+        (source_id, run_started_at, list(skip_company_ids)),
     ).rowcount
     conn.execute(
         """

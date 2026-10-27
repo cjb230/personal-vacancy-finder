@@ -9,6 +9,7 @@ from .collectors import COLLECTORS
 from .config import load_settings
 from .migrate import apply_migrations
 from .runner import run_all
+from .seeds import load_companies
 
 log = logging.getLogger("vacancy_finder")
 
@@ -25,6 +26,8 @@ def main() -> None:
 
     while True:
         with psycopg.connect(settings.database_url) as conn:
+            # Re-read each cycle so edits to the seed file apply without a restart.
+            load_companies(conn, settings.seeds_file)
             run_all(conn, COLLECTORS)
         log.info("Sleeping %d minutes", settings.run_interval_minutes)
         time.sleep(settings.run_interval_minutes * 60)

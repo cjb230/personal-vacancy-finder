@@ -1,0 +1,9 @@
+{"name": "Acme Space", "description": null, "jobs": [
+  {"title": "Engineering Manager - Flight Software", "shortcode": "AB12CD34EF", "employment_type": "Full-time", "telecommuting": false,
+   "url": "https://apply.workable.com/j/AB12CD34EF", "shortlink": "https://apply.workable.com/j/AB12CD34EF",
+   "published_on": "2026-10-15", "created_at": "2026-10-14", "country": "Poland", "city": "Warsaw",
+   "locations": [{"country": "Poland", "countryCode": "PL", "city": "Warsaw", "region": "Masovian", "hidden": false}],
+   "description": "<p>Lead the flight software team.</p>"},
+  {"title": "Python Developer", "shortcode": "ZZ99", "employment_type": "", "telecommuting": true,
+   "shortlink": "https://apply.workable.com/j/ZZ99", "published_on": "2026-10-16", "country": "Poland", "city": "", "locations": []}
+]}
