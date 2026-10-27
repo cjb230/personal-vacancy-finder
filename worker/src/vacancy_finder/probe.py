@@ -12,7 +12,7 @@ import sys
 
 import httpx
 
-from .collectors.ats import ATS_COLLECTORS, USER_AGENT
+from .collectors.ats import ATS_COLLECTORS, USER_AGENT, TrackedCompany
 from .normalize import normalize_company
 
 
@@ -37,7 +37,19 @@ def count_jobs(payload) -> int:
     return len(payload.get("jobs", []))
 
 
-def probe(client: httpx.Client, name: str, extra_slugs: list[str]) -> list[tuple[str, str, int]]:
+def check_parse(collector, payload, name: str, slug: str) -> str:
+    """Run the collector's parser on the live feed, to catch format surprises early."""
+    try:
+        postings = list(collector.parse(payload, TrackedCompany(0, name, slug)))
+    except Exception as exc:  # report, don't stop the probe
+        return f"PARSE FAILED: {exc!r}"
+    if not postings:
+        return "parsed 0"
+    p = postings[0]
+    return f"parsed {len(postings)}, e.g. {p.title!r} | {p.location_text!r} | {p.work_mode}"
+
+
+def probe(client: httpx.Client, name: str, extra_slugs: list[str]) -> list[tuple[str, str, int, str]]:
     hits = []
     for collector in ATS_COLLECTORS:
         for slug in extra_slugs + candidate_slugs(name):
@@ -48,7 +60,10 @@ def probe(client: httpx.Client, name: str, extra_slugs: list[str]) -> list[tuple
             # Some feeds answer unknown slugs with an empty board rather than a 404.
             if isinstance(payload, dict) and "jobs" not in payload:
                 continue
-            hits.append((collector.source_key, slug, count_jobs(payload)))
+            hits.append(
+                (collector.source_key, slug, count_jobs(payload),
+                 check_parse(collector, payload, name, slug))
+            )
             break
     return hits
 
@@ -70,8 +85,8 @@ def main() -> None:
             hits = probe(client, name, [s for s in extra.split(",") if s])
             if not hits:
                 print(f"# {name}: no ATS feed found", file=sys.stderr)
-            for kind, slug, jobs in hits:
-                print(f"# {name}: {kind}/{slug} has {jobs} open jobs", file=sys.stderr)
+            for kind, slug, jobs, check in hits:
+                print(f"# {name}: {kind}/{slug} has {jobs} open jobs; {check}", file=sys.stderr)
                 out.writerow([name, "", kind, slug, "", ""])
 
 
