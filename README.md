@@ -64,6 +64,6 @@ justjoin.it's robots.txt disallows its API, so the collector reads only what the
 
 Adverts written in Polish are stored with `language = 'pl'` so they aren't re-fetched, and are left out at the matching stage.
 
-To check the parser against the live site: `python -m vacancy_finder.collectors.justjoinit 5`.
+To check the parser against the live site: `python -m vacancy_finder.check_justjoinit 5`.
 
 No Fluff Jobs disallows automated access to both its API and its advert pages, so it will be covered through its email alerts instead.

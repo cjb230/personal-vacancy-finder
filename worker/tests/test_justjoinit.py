@@ -59,6 +59,29 @@ def test_parse_offer_page():
     assert p.raw["sitemap_lastmod"] == "2026-10-25"
 
 
+def test_keywords_match_whole_words_only():
+    collector = JustJoinItCollector()
+
+    def wanted(slug):
+        return collector.wanted(SitemapEntry(f"https://justjoin.it/job-offer/{slug}", None))
+
+    assert wanted("acme-staff-engineer-warszawa-python-1a2b3c4d")
+    assert wanted("acme-engineering-manager-krakow-java-1a2b3c4d")
+    assert wanted("acme-solution-architect-warszawa-data-1a2b3c4d")
+    assert not wanted("fibertide-senior-sre-wroclaw-architecture-232b83ef")
+    assert not wanted("lsi-key-account-manager-lodz-other")
+    assert not wanted("acme-staffing-specialist-lodz-hr-1a2b3c4d")
+
+
+def test_salary_falls_back_to_job_posting_block():
+    # Inside the embedded payload the JSON quotes are backslash-escaped.
+    no_figures = page().replace('\\"from\\":', '\\"fromX\\":')
+    p = parse_offer_page(no_figures, ENTRY)
+    assert (p.salary_min, p.salary_max, p.salary_currency, p.salary_period) == (
+        Decimal("31292.8"), Decimal("46939.2"), "PLN", "month"
+    )
+
+
 def test_pick_salary_prefers_b2b_among_originals():
     types = [
         {"type": "permanent", "from": 20000, "to": 25000, "currency": "PLN", "currencySource": "original"},

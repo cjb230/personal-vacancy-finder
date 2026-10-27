@@ -21,7 +21,6 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -38,11 +37,13 @@ SITEMAP_URL = "https://justjoin.it/sitemaps/active-jobs.xml"
 OFFER_PREFIX = "https://justjoin.it/job-offer/"
 _NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
-# Matched against the URL slug, which holds company, title, city and category.
+# Matched as whole hyphen-separated words against the URL slug, which holds company,
+# title, city and category. So "architect" does not match the "architecture" category,
+# and plain "manager" is left out because it mostly brings in sales and project roles.
 DEFAULT_KEYWORDS = (
-    "python", "engineering-manager", "engineering-lead", "head-of", "director", "staff",
-    "principal", "tech-lead", "team-lead", "technical-lead", "architect", "cto", "vp-",
-    "manager",
+    "python", "engineering-manager", "engineering-lead", "head-of-engineering",
+    "head-of-software", "head-of-technology", "director", "staff", "principal",
+    "tech-lead", "team-lead", "technical-lead", "architect", "cto", "vp",
 )
 
 _WORKPLACE = {"remote": "remote", "hybrid": "hybrid", "office": "onsite"}
@@ -121,6 +122,20 @@ def pick_salary(employment_types: list[dict[str, Any]]) -> dict[str, Any] | None
     return next((e for e in candidates if e.get("from") is not None), None)
 
 
+def salary_from_job_posting(posting: dict[str, Any]) -> dict[str, Any] | None:
+    """Fallback when the app data has no figures: schema.org baseSalary, in the same shape."""
+    base = posting.get("baseSalary") or {}
+    value = base.get("value") or {}
+    if value.get("minValue") is None:
+        return None
+    return {
+        "from": value.get("minValue"),
+        "to": value.get("maxValue"),
+        "currency": base.get("currency"),
+        "unit": (value.get("unitText") or "").lower(),
+    }
+
+
 def _decimal(value: Any) -> Decimal | None:
     return Decimal(str(round(value, 2))) if value is not None else None
 
@@ -133,7 +148,7 @@ def parse_offer_page(page: str, entry: SitemapEntry) -> RawPosting | None:
     posting = posting or {}
 
     employment = offer.get("employmentTypes") or []
-    salary = pick_salary(employment) or {}
+    salary = pick_salary(employment) or salary_from_job_posting(posting) or {}
     contract_types = sorted({e["type"] for e in employment if e.get("type")})
     workplace = (offer.get("workplaceType") or {}).get("value")
     location = offer.get("city") or (
@@ -200,8 +215,8 @@ class JustJoinItCollector:
         return self._incomplete
 
     def wanted(self, entry: SitemapEntry) -> bool:
-        slug = entry.slug.lower()
-        return any(k in slug for k in self.keywords)
+        slug = f"-{entry.slug.lower()}-"
+        return any(f"-{k.strip('-')}-" in slug for k in self.keywords)
 
     def sitemap_entries(self, client: httpx.Client) -> list[SitemapEntry]:
         pending, entries = [SITEMAP_URL], []
@@ -289,28 +304,3 @@ def touch_postings(conn: psycopg.Connection, source_key: str, external_ids: list
         """,
         (source_key, external_ids),
     )
-
-
-def sample(n: int) -> None:
-    """Fetch and print n matching adverts, for checking the parser against the live site."""
-    collector = JustJoinItCollector()
-    with httpx.Client(timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
-        entries = [e for e in collector.sitemap_entries(client) if collector.wanted(e)]
-        print(f"{len(entries)} matching adverts in the sitemap")
-        for i, entry in enumerate(entries[:n]):
-            if i:
-                time.sleep(collector.delay)
-            posting = parse_offer_page(client.get(entry.url).text, entry)
-            if posting is None:
-                print(f"NO DATA: {entry.url}")
-                continue
-            print(json.dumps({
-                k: str(v) if isinstance(v, (Decimal, datetime)) else v
-                for k, v in posting.__dict__.items() if k not in ("raw", "description")
-            }, ensure_ascii=False))
-
-
-if __name__ == "__main__":
-    import sys
-
-    sample(int(sys.argv[1]) if len(sys.argv) > 1 else 3)
