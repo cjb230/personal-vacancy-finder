@@ -45,9 +45,29 @@ UNKNOWN_COMPANY = normalize_company("(unknown)")
 PLACEHOLDER_TITLE = "Open roles (see post)"
 
 
+# Places some employers append to one job's title per city ("Backend Engineer - Berlin").
+_PLACE_WORDS = (
+    r"remote|hybrid|on-?site|europe|emea|eu|worldwide|anywhere|poland|polska|warsaw|warszawa"
+    r"|krakow|kraków|wroclaw|wrocław|gdansk|gdańsk|poznan|poznań|lodz|łódź|katowice|berlin|munich"
+    r"|münchen|hamburg|frankfurt|cologne|amsterdam|rotterdam|london|manchester|dublin|paris|lyon"
+    r"|madrid|barcelona|valencia|lisbon|porto|milan|rome|vienna|zurich|geneva|prague|brno"
+    r"|budapest|bucharest|sofia|athens|stockholm|oslo|copenhagen|helsinki|espoo|tallinn|riga"
+    r"|vilnius|brussels|germany|france|spain|portugal|italy|netherlands|uk|united kingdom|ireland"
+    r"|usa|us|united states|new york|nyc|san francisco|sf|seattle|austin|boston|chicago|denver"
+    r"|los angeles|toronto|vancouver|canada|singapore|tel aviv|israel|dubai|india|bangalore"
+)
+_TRAILING_PLACE = re.compile(
+    rf"(\s*,\s*|\s+[-–—|/]\s*|\s+in\s+)((?:{_PLACE_WORDS})(?:\s*(?:[,/&]|or|and)\s*(?:{_PLACE_WORDS}))*)"
+    r"(\s*,\s*[a-z]{2})?\s*$",
+    re.I,
+)
+
+
 def normalize_title(title: str) -> str:
     # Drop bracketed asides such as "(m/f/d)" or "[Remote]".
     title = re.sub(r"[(\[][^)\]]*[)\]]", " ", title)
+    # ...and trailing places, so per-city copies of one job match.
+    title = _TRAILING_PLACE.sub("", title.strip())
     words = [w for w in _ascii_words(title) if w not in _TITLE_NOISE]
     return " ".join(words)
 
