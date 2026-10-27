@@ -68,8 +68,8 @@ def test_polish_advert_or_polish_requirement_is_out():
 
 
 @pytest.mark.parametrize("modes, locations, verdict_no", [
-    (("remote",), ("United States",), True),
-    (("remote",), ("Remote - US only",), True),
+    (("remote",), ("United States",), False),
+    (("remote",), ("Remote - US only",), False),
     (("remote",), ("EMEA",), False),
     (("remote",), (), False),
     (("hybrid",), ("Warsaw, Poland",), False),
@@ -122,11 +122,6 @@ def test_multi_role_hn_post_judged_on_engineering_role():
     assert result.role_level == "other"
 
 
-def test_region_limit_in_title():
-    result = score_job(job("Data Engineering Tech Lead (LatAm Only)", locations=("Anywhere",)))
-    assert result.verdict == "no"
-
-
 def test_unknown_mode_abroad_is_probably_onsite():
     reasons = score_job(job("Staff Software Engineer", modes=("unknown",),
                             locations=("Parsdorf, Bavaria",))).reasons
@@ -150,12 +145,28 @@ def test_content_systems_is_engineering():
 @pytest.mark.parametrize("modes, locations", [
     (("unknown",), ("San Francisco, CA",)),
     (("hybrid",), ("Abu Dhabi",)),
-    (("onsite",), ("Kansas City",)),
     (("remote",), ("Boulder, CO",)),
+    (("remote",), ("United States",)),
 ])
-def test_outside_europe_is_out(modes, locations):
-    result = score_job(job("Staff Python Engineer", modes=modes, locations=locations))
-    assert result.verdict == "no"
+def test_outside_europe_is_a_maybe_not_ruled_out(modes, locations):
+    result = score_job(job("Staff Python Engineer", modes=modes, locations=locations,
+                           sectors=["space"], pay=Decimal(40000)))
+    assert result.verdict == "maybe"
+
+
+def test_remote_anywhere_and_time_zone_overlap():
+    anywhere = score_job(job("Staff Python Engineer", locations=("Anywhere",), sectors=["space"]))
+    assert anywhere.verdict == "match"
+    overlap = score_job(job("Staff Python Engineer", locations=("Anywhere",), sectors=["space"],
+                            description="Python and SQL. Some overlap with PST required."))
+    assert "asks for overlap with US/other time zones: check the hours" in overlap.reasons
+    assert overlap.verdict == "match"
+
+
+def test_region_in_title_is_a_maybe():
+    result = score_job(job("Data Engineering Tech Lead (LatAm Only)", locations=("Anywhere",),
+                           sectors=["space"]))
+    assert result.verdict == "maybe"
 
 
 def test_european_country_codes_are_not_us_states():

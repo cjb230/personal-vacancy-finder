@@ -107,6 +107,11 @@ REMOTE_ELSEWHERE_ONLY = _rx(
     r"|asia|australia|new zealand|india|brazil|mexico|philippines|uk only|us[- ]based|latam only"
     r"|(us|pst|est|pacific|eastern) time ?zones?|pst|pacific time)\b"
 )
+TIME_ZONE_OVERLAP = _rx(
+    r"\b(pst|pdt|est|edt|cst|pacific|eastern|central) (time|hours)|\b(us|u\.s\.|american|"
+    r"north american|apac|asian) (time ?zones?|business hours|hours)|overlap with (pst|est|pacific"
+    r"|eastern|us)|crossover w(ith|/) (pst|est)"
+)
 EUROPE_WIDE = _rx(r"europe|\beu\b|emea|\bcet\b|cest|worldwide|anywhere|global|international")
 # Places that are clearly not in Europe, for jobs whose location is a city.
 OUTSIDE_EUROPE = _rx(
@@ -242,9 +247,11 @@ def score_job(job: JobFacts) -> Score:
     # Location and work mode.
     place = " | ".join(job.locations)
     modes = job.work_modes - {"unknown"} or {"unknown"}
-    if REMOTE_ELSEWHERE_ONLY.search(title) and not EUROPE_OK.search(title):
-        blockers.append(f"limited to another region (\"{title}\")")
+    # Jobs listed outside Europe aren't ruled out: some remote employers hire anywhere, and
+    # some only ask for time-zone overlap. They are capped at maybe, to check by hand.
     caps: list[str] = []  # reasons a job can be at most a maybe
+    if REMOTE_ELSEWHERE_ONLY.search(title) and not EUROPE_OK.search(title):
+        caps.append(f"title names another region (\"{title}\"): check where they hire")
     outside_europe = bool(place) and bool(
         (REMOTE_ELSEWHERE_ONLY.search(place) or OUTSIDE_EUROPE.search(place))
         and not (EUROPE_WIDE.search(place) or POLAND.search(place)
@@ -252,7 +259,9 @@ def score_job(job: JobFacts) -> Score:
     )
     if "remote" in modes:
         if outside_europe:
-            blockers.append(f"remote only within {place}")
+            points += 5
+            reasons.append(f"remote, listed for {place} (+5)")
+            caps.append(f"remote listed for {place}: check whether they hire from Poland")
         elif POLAND.search(place) or EUROPE_WIDE.search(place):
             points += 15
             reasons.append("remote, Europe/Poland OK (+15)")
@@ -263,8 +272,6 @@ def score_job(job: JobFacts) -> Score:
         else:
             points += 5
             reasons.append("remote, region not stated (+5)")
-    elif outside_europe:
-        blockers.append(f"based in {place}, outside Europe")
     elif "hybrid" in modes:
         if WARSAW.search(place):
             points += 15
@@ -290,6 +297,9 @@ def score_job(job: JobFacts) -> Score:
     elif place and not EUROPE_OK.search(place):
         points -= 10
         reasons.append(f"in {place}, work mode not stated: probably on-site (-10)")
+        caps.append(f"based in {place}: check whether remote is possible")
+    if TIME_ZONE_OVERLAP.search(f"{place}\n{title}\n{text}"):
+        reasons.append("asks for overlap with US/other time zones: check the hours")
 
     # Sector.
     sectors = set(job.company_sectors)
