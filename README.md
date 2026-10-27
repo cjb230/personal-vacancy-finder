@@ -67,3 +67,11 @@ Adverts written in Polish are stored with `language = 'pl'` so they aren't re-fe
 To check the parser against the live site: `python -m vacancy_finder.check_justjoinit 5`.
 
 No Fluff Jobs disallows automated access to both its API and its advert pages, so it will be covered through its email alerts instead.
+
+### Remote boards
+
+Himalayas (searched with role queries, limited to jobs open to people in Poland), Remote OK, We Work Remotely (programming and DevOps feeds), Arbeitnow (remote jobs and jobs in Poland only) and the monthly Hacker News "Who is hiring?" thread. These feeds show only recent jobs, so a posting is closed once it has been missing for a couple of weeks (45 days for Hacker News) rather than on its first absence. Remotive is left out: its robots.txt disallows the API.
+
+Settings: `HIMALAYAS_QUERIES` (comma-separated), `HIMALAYAS_MAX_PAGES` (20 jobs per page, per query), `ARBEITNOW_MAX_PAGES`.
+
+To check them against the live sites without touching the database: `python -m vacancy_finder.check_feeds` (or name sources, e.g. `check_feeds himalayas`).

@@ -31,6 +31,9 @@ services:
       JUSTJOINIT_KEYWORDS: ${JUSTJOINIT_KEYWORDS:-}
       JUSTJOINIT_DELAY_SECONDS: ${JUSTJOINIT_DELAY_SECONDS:-2}
       JUSTJOINIT_MAX_PAGES: ${JUSTJOINIT_MAX_PAGES:-500}
+      HIMALAYAS_QUERIES: ${HIMALAYAS_QUERIES:-}
+      HIMALAYAS_MAX_PAGES: ${HIMALAYAS_MAX_PAGES:-5}
+      ARBEITNOW_MAX_PAGES: ${ARBEITNOW_MAX_PAGES:-10}
     volumes:
       # Mounted so edits to the company list apply on the next cycle without a rebuild.
       - ./worker/seeds:/app/seeds:ro

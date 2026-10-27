@@ -46,7 +46,8 @@ def html_to_text(fragment: str | None) -> str | None:
     if not fragment:
         return None
     text = html.unescape(fragment)  # Greenhouse double-escapes its HTML
-    text = re.sub(r"<(br|/p|/li|/h\d)\s*/?>", "\n", text, flags=re.I)
+    # Paragraph breaks; Hacker News uses bare <p> separators without closing tags.
+    text = re.sub(r"<(br|/p|/li|/h\d)\s*/?>|<p(\s[^>]*)?>", "\n", text, flags=re.I)
     text = re.sub(r"<[^>]+>", " ", text)
     text = html.unescape(text)
     text = re.sub(r"[ \t\xa0]+", " ", text)

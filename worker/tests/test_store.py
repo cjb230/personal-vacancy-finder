@@ -103,3 +103,17 @@ def test_failed_run_is_recorded_and_closes_nothing(conn):
         "SELECT status, error FROM collection_runs ORDER BY id DESC LIMIT 1"
     ).fetchone()
     assert status == "failed" and "site down" in error
+
+
+def test_latest_n_feeds_close_only_after_stale_window(conn):
+    class LatestOnly(FakeCollector):
+        stale_after_days = 14
+
+    run_collector(conn, LatestOnly("feed", [posting("1")]))
+    run_collector(conn, LatestOnly("feed", []))
+    assert count(conn, "SELECT count(*) FROM postings WHERE closed_at IS NULL") == 1
+
+    conn.execute("UPDATE postings SET last_seen_at = now() - interval '20 days'")
+    conn.commit()
+    run_collector(conn, LatestOnly("feed", []))
+    assert count(conn, "SELECT count(*) FROM postings WHERE closed_at IS NULL") == 0
