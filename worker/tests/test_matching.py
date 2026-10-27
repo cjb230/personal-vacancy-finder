@@ -145,3 +145,29 @@ def test_senior_and_non_software_roles_capped_at_maybe():
 
 def test_content_systems_is_engineering():
     assert score_job(job("Senior Principal Engineer - AI Content Systems")).verdict != "no"
+
+
+@pytest.mark.parametrize("modes, locations", [
+    (("unknown",), ("San Francisco, CA",)),
+    (("hybrid",), ("Abu Dhabi",)),
+    (("onsite",), ("Kansas City",)),
+    (("remote",), ("Boulder, CO",)),
+])
+def test_outside_europe_is_out(modes, locations):
+    result = score_job(job("Staff Python Engineer", modes=modes, locations=locations))
+    assert result.verdict == "no"
+
+
+def test_european_country_codes_are_not_us_states():
+    assert score_job(job("Staff Python Engineer", modes=("hybrid",), locations=("Munich, DE",))
+                     ).verdict != "no"
+
+
+def test_remote_within_another_country_and_hybrid_abroad_capped():
+    spain = score_job(job("Engineering Director", modes=("remote",), locations=("Spain",),
+                          sectors=["space"]))
+    assert spain.verdict == "maybe"
+    assert any("remote within Spain" in r for r in spain.reasons)
+    berlin = score_job(job("Engineering Manager, Platform", modes=("hybrid",),
+                           locations=("Berlin, Germany",), sectors=["space"], pay=Decimal(40000)))
+    assert berlin.verdict == "maybe"

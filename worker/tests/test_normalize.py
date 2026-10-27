@@ -61,3 +61,10 @@ def test_more_languages_detected():
 def test_polish_letters_in_title():
     assert detect_title_language("Specjalista ds. księgowości") == "pl"
     assert detect_title_language("Thermal Engineer") is None
+
+
+def test_per_city_copies_of_a_title_match():
+    titles = ["Senior Software Engineer - Berlin", "Senior Software Engineer, London",
+              "Senior Software Engineer – New York, NY", "Senior Software Engineer in Warsaw"]
+    assert {normalize_title(t) for t in titles} == {"senior software engineer"}
+    assert normalize_title("Software Engineer - Platform") == "software engineer platform"
