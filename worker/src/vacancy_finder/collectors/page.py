@@ -52,6 +52,16 @@ def _card(link: Tag, pattern: re.Pattern) -> Tag:
     return card
 
 
+def _location(card: Tag) -> str | None:
+    """The first location-classed element's text. When it holds several parts, e.g. the same
+    city in English and Polish, the first part."""
+    for tag in card.find_all(lambda t: _LOCATION_CLASS.search(" ".join(t.get("class") or []))):
+        parts = [text for child in tag.find_all(True) if not child.find(True) and (text := _text(child))]
+        if text := (parts[0] if parts else _text(tag)):
+            return text
+    return None
+
+
 class PageCollector(AtsCollector):
     source_key = "page"
     source_name = "Company careers pages"
@@ -74,7 +84,7 @@ class PageCollector(AtsCollector):
             seen.add(url)
             card = _card(link, pattern)
             title = _find_text(link, _is_title) or _find_text(card, _is_title) or _text(link)
-            location = _find_text(card, lambda t: _LOCATION_CLASS.search(" ".join(t.get("class") or [])))
+            location = _location(card)
             yield RawPosting(
                 external_id=url,
                 url=url,

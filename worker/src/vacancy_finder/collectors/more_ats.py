@@ -164,7 +164,11 @@ class RecruiteeCollector(AtsCollector):
 
 
 class TraffitCollector(AtsCollector):
-    """Traffit, a Polish applicant tracking system. Its board fields are often in Polish."""
+    """Traffit, a Polish applicant tracking system. Its board fields are often in Polish.
+
+    A job can be posted twice, in English and in Polish; both copies share a recruitment id,
+    so only one is kept, the English one where there is one.
+    """
 
     source_key = "traffit"
     source_name = "Traffit careers pages"
@@ -173,7 +177,13 @@ class TraffitCollector(AtsCollector):
         return f"https://{slug}.traffit.com/public/job_posts/published"
 
     def parse(self, payload: Any, company: TrackedCompany) -> Iterable[RawPosting]:
+        chosen: dict[Any, dict] = {}
         for post in payload:
+            recruitment = (post.get("advert") or {}).get("recruitment") or {}
+            key = recruitment.get("id") or recruitment.get("nr_ref") or ("post", post["id"])
+            if key not in chosen or (post.get("advert") or {}).get("language") == "en":
+                chosen[key] = post
+        for post in chosen.values():
             advert = post.get("advert") or {}
             values = {v.get("field_id"): v.get("value") for v in advert.get("values") or []}
             places = [
