@@ -8,6 +8,7 @@ import psycopg
 from .collectors import COLLECTORS
 from .config import load_settings
 from .migrate import apply_migrations
+from .renormalize import renormalize
 from .runner import run_all
 from .seeds import load_companies
 
@@ -23,6 +24,7 @@ def main() -> None:
     with psycopg.connect(settings.database_url) as conn:
         applied = apply_migrations(conn, settings.migrations_dir)
         log.info("Database ready (%d new migrations)", len(applied))
+        renormalize(conn)  # in case the company/job matching rules changed
 
     while True:
         with psycopg.connect(settings.database_url) as conn:

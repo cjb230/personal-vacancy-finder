@@ -26,3 +26,5 @@ class RawPosting:
     # Set by ATS collectors so the company row records where its feed lives.
     ats_kind: str | None = None
     ats_slug: str | None = None
+    # True when the title is a placeholder, so the posting mustn't merge with others by title.
+    unique_job: bool = False

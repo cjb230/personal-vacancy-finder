@@ -1,5 +1,6 @@
 """Writes collected postings into the database, merging duplicates into one job."""
 
+import hashlib
 from dataclasses import asdict
 from datetime import datetime
 
@@ -7,7 +8,13 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from .models import RawPosting
-from .normalize import detect_language, job_fingerprint, normalize_company
+from .normalize import (
+    UNKNOWN_COMPANY,
+    detect_language,
+    detect_title_language,
+    job_fingerprint,
+    normalize_company,
+)
 
 
 def ensure_source(conn: psycopg.Connection, key: str, name: str, kind: str) -> int:
@@ -42,7 +49,18 @@ def ensure_company(conn: psycopg.Connection, posting: RawPosting) -> int:
     return row[0]
 
 
-def ensure_job(conn: psycopg.Connection, company_id: int, posting: RawPosting) -> int:
+def posting_fingerprint(source_id: int, posting: RawPosting) -> str:
+    """Normally company + title, so the same job on several sites is one job. A posting with
+    no usable company or title (e.g. an HN post with no role line) is its own job instead,
+    or every such posting would merge into one."""
+    if posting.unique_job or normalize_company(posting.company_name) in ("", UNKNOWN_COMPANY):
+        key = f"posting|{source_id}|{posting.external_id}"
+        return hashlib.sha256(key.encode()).hexdigest()[:32]
+    return job_fingerprint(posting.company_name, posting.title)
+
+
+def ensure_job(conn: psycopg.Connection, company_id: int, posting: RawPosting,
+               fingerprint: str) -> int:
     row = conn.execute(
         """
         INSERT INTO jobs (company_id, title, fingerprint, location_text, work_mode)
@@ -58,7 +76,7 @@ def ensure_job(conn: psycopg.Connection, company_id: int, posting: RawPosting) -
         (
             company_id,
             posting.title,
-            job_fingerprint(posting.company_name, posting.title),
+            fingerprint,
             posting.location_text,
             posting.work_mode,
         ),
@@ -69,11 +87,13 @@ def ensure_job(conn: psycopg.Connection, company_id: int, posting: RawPosting) -
 def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting) -> bool:
     """Store one posting. Returns True if it had not been seen before."""
     company_id = ensure_company(conn, posting)
-    job_id = ensure_job(conn, company_id, posting)
+    job_id = ensure_job(conn, company_id, posting, posting_fingerprint(source_id, posting))
     fields = asdict(posting)
     if fields["language"] is None:
-        fields["language"] = detect_language(posting.description)
-    for unstored in ("ats_kind", "ats_slug"):
+        fields["language"] = detect_language(posting.description) or detect_title_language(
+            posting.title
+        )
+    for unstored in ("ats_kind", "ats_slug", "unique_job"):
         fields.pop(unstored)
     fields["raw"] = Jsonb(fields["raw"])
     row = conn.execute(
@@ -95,6 +115,7 @@ def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting
             location_text = EXCLUDED.location_text,
             work_mode = EXCLUDED.work_mode,
             description = EXCLUDED.description,
+            language = EXCLUDED.language,
             contract_type = EXCLUDED.contract_type,
             salary_min = EXCLUDED.salary_min,
             salary_max = EXCLUDED.salary_max,
@@ -134,6 +155,18 @@ def close_unseen(
           AND NOT EXISTS (
               SELECT 1 FROM postings p WHERE p.job_id = jobs.id AND p.closed_at IS NULL
           )
+        """
+    )
+    # Jobs left with no postings at all, after their postings moved to another job.
+    conn.execute(
+        "DELETE FROM jobs WHERE NOT EXISTS (SELECT 1 FROM postings p WHERE p.job_id = jobs.id)"
+    )
+    # Companies only ever known from those postings, e.g. a misread name since corrected.
+    conn.execute(
+        """
+        DELETE FROM companies c
+        WHERE NOT c.tracked AND c.ats_kind IS NULL AND NOT c.excluded
+          AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.company_id = c.id)
         """
     )
     return closed

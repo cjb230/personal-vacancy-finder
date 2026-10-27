@@ -25,6 +25,7 @@ import httpx
 import psycopg
 
 from ..models import RawPosting
+from ..normalize import PLACEHOLDER_TITLE
 from .ats import USER_AGENT, clean, from_iso, guess_work_mode, html_to_text
 
 log = logging.getLogger(__name__)
@@ -327,6 +328,32 @@ _HN_PAY_PATTERNS = [
 ]
 
 
+# Labels some posters put before the first field: "Company: Acme | ...".
+_HN_LABEL = re.compile(r"^(company|employer|who|name)\s*:\s*", re.I)
+_HN_NOT_A_COMPANY = re.compile(r"^(location|role|position|title|remote|salary)\s*:", re.I)
+# A first field that is really a sentence: "Beacon AI builds intelligent systems that ...",
+# "At Tether we're hiring!". The capitalised words before the first lower-case word are
+# usually the name; "At", "We're" and similar openers mean there's none to take.
+_HN_OPENERS = {"at", "we", "we're", "were", "our", "join", "hiring", "come", "the", "i'm", "i"}
+
+
+def hn_company(field: str) -> str:
+    field = _HN_LABEL.sub("", field.strip())
+    if not field or _HN_NOT_A_COMPANY.match(field):
+        return ""
+    words = field.split()
+    if len(field) <= 60 and len(words) <= 6:
+        return field
+    name = []
+    for word in words:
+        if not (word[:1].isupper() or word[:1].isdigit()) or len(name) == 4:
+            break
+        name.append(word)
+    if name and name[0].lower() in _HN_OPENERS:
+        name = name[1:]
+    return " ".join(name).strip(" ,.:;!-") if 0 < len(name) <= 4 else ""
+
+
 def _split_fields(line: str) -> list[str]:
     splitter = _HN_PIPE if "|" in line else _HN_OTHER_SEPARATORS
     return [p.strip() for p in splitter.split(line) if p and p.strip()]
@@ -377,7 +404,7 @@ def split_hn_first_line(line: str) -> dict[str, Any]:
         company = _HN_PARENS.sub("", company)
         out["links"] += [m.group(0) for m in _HN_URL.finditer(company)]
         company = _HN_URL.sub("", company)
-        out["company"] = re.sub(r"\s{2,}", " ", company).strip(" ,-")
+        out["company"] = hn_company(re.sub(r"\s{2,}", " ", company).strip(" ,-"))
         for field in fields[1:]:
             classify(field, after_company=True)
     return out
@@ -448,7 +475,8 @@ class HackerNewsHiringCollector(FeedCollector):
             url=f"https://news.ycombinator.com/item?id={comment['id']}",
             # No recognisable role: a neutral title rather than the raw line, which would
             # also make every such post look unique to de-duplication.
-            title=(fields["role"] or "Open roles (see post)")[:200],
+            title=(fields["role"] or PLACEHOLDER_TITLE)[:200],
+            unique_job=fields["role"] is None,
             company_name=(fields["company"] or "(unknown)")[:200],
             location_text=" | ".join(fields["places"])[:300] or None,
             work_mode=guess_work_mode(first_line),
