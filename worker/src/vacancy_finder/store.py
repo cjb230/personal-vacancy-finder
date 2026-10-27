@@ -7,7 +7,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from .models import RawPosting
-from .normalize import job_fingerprint, normalize_company
+from .normalize import detect_language, job_fingerprint, normalize_company
 
 
 def ensure_source(conn: psycopg.Connection, key: str, name: str, kind: str) -> int:
@@ -71,6 +71,8 @@ def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting
     company_id = ensure_company(conn, posting)
     job_id = ensure_job(conn, company_id, posting)
     fields = asdict(posting)
+    if fields["language"] is None:
+        fields["language"] = detect_language(posting.description)
     for unstored in ("ats_kind", "ats_slug"):
         fields.pop(unstored)
     fields["raw"] = Jsonb(fields["raw"])
@@ -111,10 +113,10 @@ def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting
 def close_unseen(
     conn: psycopg.Connection,
     source_id: int,
-    run_started_at: datetime,
+    seen_since: datetime,
     skip_company_ids: set[int] = frozenset(),
 ) -> int:
-    """Mark postings this source no longer lists as closed, then close jobs with no open postings."""
+    """Close this source's postings not seen since `seen_since`, then jobs with no open postings."""
     closed = conn.execute(
         """
         UPDATE postings p SET closed_at = now()
@@ -123,7 +125,7 @@ def close_unseen(
           AND p.source_id = %s AND p.closed_at IS NULL AND p.last_seen_at < %s
           AND (j.company_id IS NULL OR NOT j.company_id = ANY(%s))
         """,
-        (source_id, run_started_at, list(skip_company_ids)),
+        (source_id, seen_since, list(skip_company_ids)),
     ).rowcount
     conn.execute(
         """

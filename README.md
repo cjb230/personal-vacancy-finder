@@ -62,8 +62,16 @@ If one company's feed fails, its postings are left open rather than closed, and 
 
 justjoin.it's robots.txt disallows its API, so the collector reads only what the site offers crawlers: the sitemap of active adverts and each advert's page. To stay polite it opens only adverts whose URL contains a role keyword as a whole word (`JUSTJOINIT_KEYWORDS`), only re-opens an advert when its sitemap date changes, waits `JUSTJOINIT_DELAY_SECONDS` between pages, and opens at most `JUSTJOINIT_MAX_PAGES` per run. The first runs work through the backlog; after that each run fetches only new or changed adverts.
 
-Adverts written in Polish are stored with `language = 'pl'` so they aren't re-fetched, and are left out at the matching stage.
+Every posting gets a detected `language` ('en', 'pl' or 'de'). Adverts in Polish or German are kept, so they aren't re-fetched, and are left out at the matching stage.
 
 To check the parser against the live site: `python -m vacancy_finder.check_justjoinit 5`.
 
 No Fluff Jobs disallows automated access to both its API and its advert pages, so it will be covered through its email alerts instead.
+
+### Remote boards
+
+Himalayas (searched with role queries, limited to jobs open to people in Poland), Remote OK, We Work Remotely (programming and DevOps feeds), Arbeitnow (remote jobs and jobs in Poland only) and the Hacker News "Who is hiring?" threads (this month and last, re-read every run so new comments are picked up). These feeds show only recent jobs, so a posting is closed once it has been missing for a couple of weeks (45 days for Hacker News) rather than on its first absence. Remotive is left out: its robots.txt disallows the API.
+
+Settings: `HIMALAYAS_QUERIES` (comma-separated), `HIMALAYAS_MAX_PAGES` (20 jobs per page, per query), `ARBEITNOW_MAX_PAGES`.
+
+To check them against the live sites without touching the database: `python -m vacancy_finder.check_feeds` (or name sources, e.g. `check_feeds himalayas`).

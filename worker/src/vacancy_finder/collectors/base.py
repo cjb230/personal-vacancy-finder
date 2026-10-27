@@ -12,6 +12,9 @@ class Collector(Protocol):
     source_key: str  # matches sources.key
     source_name: str
     source_kind: str  # ats | board | aggregator | email | custom
+    # Optional: for feeds that list only recent jobs, close a posting once it has been
+    # missing this many days instead of on the first run it is missing. Default 0.
+    # stale_after_days: int
 
     def collect(self, conn: psycopg.Connection) -> Iterable[RawPosting]:
         """Yield every currently open posting the source has."""

@@ -1,6 +1,7 @@
 """Runs each collector once and records how it went."""
 
 import logging
+from datetime import timedelta
 
 import psycopg
 
@@ -27,8 +28,14 @@ def run_collector(conn: psycopg.Connection, collector: Collector) -> None:
             if upsert_posting(conn, source_id, posting):
                 new += 1
         # Only close what is missing after a successful pass, and not for companies that failed.
+        # Feeds that only show the latest N jobs close a posting after it has been
+        # missing for a while, rather than on its first absence.
+        stale_days = getattr(collector, "stale_after_days", 0)
         closed = close_unseen(
-            conn, source_id, started_at, skip_company_ids=collector.incomplete_company_ids()
+            conn,
+            source_id,
+            started_at - timedelta(days=stale_days),
+            skip_company_ids=collector.incomplete_company_ids(),
         )
         conn.execute(
             """
