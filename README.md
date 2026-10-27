@@ -1,1 +1,43 @@
 # personal-vacancy-finder
+
+Finds job vacancies across many sources and collects them into one Postgres database, so discovery is thorough rather than limited to the few boards checked by hand.
+
+Two containers run under Docker Compose:
+
+- **db**: Postgres 16, holding sources, companies, jobs and postings. Data lives in the `pgdata` volume.
+- **worker**: a Python process that applies database migrations on start, then runs every registered collector on a fixed interval.
+
+## Running it
+
+```sh
+cp .env.example .env      # then set POSTGRES_PASSWORD
+docker compose up -d --build
+docker compose logs -f worker
+```
+
+The database is published on `127.0.0.1:5432` (change with `POSTGRES_PORT`), so any desktop SQL client can connect using the credentials in `.env`.
+
+## How data is stored
+
+- A **posting** is one advert on one source, unique by `(source, external_id)`.
+- A **job** is the real vacancy behind one or more postings. Postings with the same normalized company name and title share a job, so a role advertised on three boards is counted once.
+- A posting that disappears from its source after a successful run gets `closed_at` set. A job closes when none of its postings is open.
+- Every collector run is logged in `collection_runs`, with counts and any error.
+
+Schema changes go in `worker/migrations/` as new numbered `.sql` files. The worker applies each one once.
+
+## Development
+
+```sh
+cd worker
+python -m venv .venv && . .venv/bin/activate
+pip install -e '.[dev]'
+pytest                                          # unit tests only
+TEST_DATABASE_URL=postgresql://... pytest       # plus database tests
+```
+
+The database tests wipe the schema of the database they point at, so give them a disposable one, e.g. `docker compose exec db createdb -U vacancies vacancies_test`.
+
+## Sources
+
+See [docs/job-sources.md](docs/job-sources.md) for the source map and build order. Collectors live in `worker/src/vacancy_finder/collectors/` and are registered in `COLLECTORS`.
