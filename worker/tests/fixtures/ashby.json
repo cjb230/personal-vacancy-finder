@@ -1,0 +1,9 @@
+{"apiVersion": "1", "jobs": [
+  {"id": "0f1e", "title": "Staff Engineer, Data Platform", "location": "Berlin", "secondaryLocations": [{"location": "Warsaw"}],
+   "isListed": true, "isRemote": false, "workplaceType": "Hybrid", "descriptionPlain": "Process EO imagery.",
+   "publishedAt": "2026-10-10T12:00:00.000+00:00", "employmentType": "FullTime", "jobUrl": "https://jobs.ashbyhq.com/acme/0f1e",
+   "applyUrl": "https://jobs.ashbyhq.com/acme/0f1e/application"},
+  {"id": "hidden1", "title": "Secret role", "location": "Paris", "isListed": false, "jobUrl": "https://jobs.ashbyhq.com/acme/hidden1"},
+  {"id": "2a3b", "title": "Engineering Lead", "location": "Europe", "isListed": true, "isRemote": true,
+   "descriptionHtml": "<p>Remote across the EU</p>", "jobUrl": "https://jobs.ashbyhq.com/acme/2a3b"}
+]}

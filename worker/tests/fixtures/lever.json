@@ -1,0 +1,8 @@
+[
+  {"id": "a1b2c3", "text": "Senior Backend Engineer (Python)", "hostedUrl": "https://jobs.lever.co/acme/a1b2c3",
+   "categories": {"location": "Gdańsk", "allLocations": ["Gdańsk", "Warsaw"], "team": "Platform", "commitment": "Full-time"},
+   "workplaceType": "hybrid", "createdAt": 1761000000000, "descriptionPlain": "We build satellites.",
+   "salaryRange": {"min": 25000, "max": 32000, "currency": "PLN", "interval": "per-month-salary"}},
+  {"id": "d4e5f6", "text": "Head of Engineering", "hostedUrl": "https://jobs.lever.co/acme/d4e5f6",
+   "categories": {"location": "Remote"}, "workplaceType": "unspecified", "createdAt": 1761000000000, "description": "<p>Lead us</p>"}
+]

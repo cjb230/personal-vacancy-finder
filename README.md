@@ -41,3 +41,19 @@ The database tests wipe the schema of the database they point at, so give them a
 ## Sources
 
 See [docs/job-sources.md](docs/job-sources.md) for the source map and build order. Collectors live in `worker/src/vacancy_finder/collectors/` and are registered in `COLLECTORS`.
+
+### Company careers feeds
+
+The Greenhouse, Lever (global and EU), Ashby and Workable collectors poll every company in `worker/seeds/companies.csv` that has an `ats_kind` and `ats_slug`. The file is mounted into the worker, so edits apply on the next cycle without a rebuild. Columns: `name`, `sectors` (separated by `;`), `ats_kind`, `ats_slug`, `website`, `notes`.
+
+To find a company's feed, run the probe, which tries likely slugs on each ATS and prints ready-to-paste rows:
+
+```sh
+cd worker
+python -m vacancy_finder.probe "KP Labs" "ICEYE"
+python -m vacancy_finder.probe --file seeds/candidates.txt
+```
+
+Check each hit's job count looks right before adding it, since a common name can match a different company.
+
+If one company's feed fails, its postings are left open rather than closed, and the run carries on with the rest.

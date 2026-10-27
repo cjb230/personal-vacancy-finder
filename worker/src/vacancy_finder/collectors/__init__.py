@@ -1,4 +1,4 @@
+from .ats import ATS_COLLECTORS
 from .base import Collector
 
-# Collectors are registered here as they are built (step 3).
-COLLECTORS: list[Collector] = []
+COLLECTORS: list[Collector] = [*ATS_COLLECTORS]

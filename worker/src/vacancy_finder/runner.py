@@ -22,12 +22,14 @@ def run_collector(conn: psycopg.Connection, collector: Collector) -> None:
 
     seen = new = 0
     try:
-        for posting in collector.collect():
+        for posting in collector.collect(conn):
             seen += 1
             if upsert_posting(conn, source_id, posting):
                 new += 1
-        # Only close what is missing after a complete, successful pass.
-        closed = close_unseen(conn, source_id, started_at)
+        # Only close what is missing after a successful pass, and not for companies that failed.
+        closed = close_unseen(
+            conn, source_id, started_at, skip_company_ids=collector.incomplete_company_ids()
+        )
         conn.execute(
             """
             UPDATE collection_runs

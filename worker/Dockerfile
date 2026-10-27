@@ -8,6 +8,7 @@ COPY src ./src
 RUN pip install --no-cache-dir .
 
 COPY migrations ./migrations
-ENV MIGRATIONS_DIR=/app/migrations
+COPY seeds ./seeds
+ENV MIGRATIONS_DIR=/app/migrations SEEDS_FILE=/app/seeds/companies.csv
 
 CMD ["python", "-m", "vacancy_finder"]
