@@ -127,6 +127,16 @@ def _rekey_jobs(conn: psycopg.Connection) -> int:
             """,
             {"keep": keep, "others": others},
         )
+        # Keep James's decision on any of them, unless the kept job already has one.
+        conn.execute(
+            """
+            UPDATE job_reviews SET job_id = %(keep)s
+            WHERE job_id = (SELECT job_id FROM job_reviews WHERE job_id = ANY(%(others)s)
+                            ORDER BY updated_at DESC LIMIT 1)
+              AND NOT EXISTS (SELECT 1 FROM job_reviews WHERE job_id = %(keep)s)
+            """,
+            {"keep": keep, "others": others},
+        )
         conn.execute("DELETE FROM jobs WHERE id = ANY(%s)", (others,))
         merged += len(others)
     conn.execute("UPDATE jobs SET fingerprint = 'tmp:' || id")

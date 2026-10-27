@@ -17,6 +17,12 @@ docker compose logs -f worker
 
 The database is published on `127.0.0.1:5432` (change with `POSTGRES_PORT`), so any desktop SQL client can connect using the credentials in `.env`.
 
+## Results page
+
+The worker scores every open job against the search criteria after each cycle and serves a results page at http://localhost:8080 (this machine only; change the port with `WEB_PORT` in `.env`). Jobs are ranked by score, with the reasons shown under each one. Tabs split them into matches, maybes and filtered-out jobs, and buttons mark a job interested, not interested or applied; marked jobs move to their own tabs and stay marked across rescoring.
+
+The rules live in `worker/src/vacancy_finder/matching.py`, written to be read and tuned: role level, Python and SQL, location and work mode, sector, contract and pay add or take away points, and a few things rule a job out entirely (an advert not in English, a requirement to speak Polish or German, a non-engineering role, on-site outside Warsaw, remote limited to other continents, tobacco or gambling).
+
 ## How data is stored
 
 - A **posting** is one advert on one source, unique by `(source, external_id)`.
