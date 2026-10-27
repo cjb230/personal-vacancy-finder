@@ -4,7 +4,7 @@ Finds job vacancies across many sources and collects them into one Postgres data
 
 Two containers run under Docker Compose:
 
-- **db**: Postgres 16, holding sources, companies, jobs and postings. Data lives in the `pgdata` volume.
+- **db**: Postgres 18, holding sources, companies, jobs and postings. Data lives in the `pgdata18` volume.
 - **worker**: a Python process that applies database migrations on start, then runs every registered collector on a fixed interval.
 
 ## Running it
