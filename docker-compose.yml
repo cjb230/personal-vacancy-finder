@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: postgres:18
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-vacancies}
@@ -10,7 +10,8 @@ services:
       # Bound to localhost only, so you can connect with a desktop SQL client.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Postgres 18+ keeps data in a versioned folder under /var/lib/postgresql.
+      - pgdata18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -35,4 +36,4 @@ services:
       - ./worker/seeds:/app/seeds:ro
 
 volumes:
-  pgdata:
+  pgdata18:
