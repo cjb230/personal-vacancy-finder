@@ -28,12 +28,14 @@ class TrackedCompany:
     id: int
     name: str
     slug: str
+    careers_url: str | None = None
+    link_pattern: str | None = None
 
 
 def tracked_companies(conn: psycopg.Connection, ats_kind: str) -> list[TrackedCompany]:
     rows = conn.execute(
         """
-        SELECT id, name, ats_slug FROM companies
+        SELECT id, name, ats_slug, careers_url, link_pattern FROM companies
         WHERE tracked AND NOT excluded AND ats_kind = %s AND ats_slug IS NOT NULL
         ORDER BY name
         """,
@@ -112,7 +114,7 @@ class AtsCollector:
         try:
             for company in companies:
                 try:
-                    payload = self.fetch(client, company.slug)
+                    payload = self.fetch_company(client, company)
                     postings = list(self.parse(payload, company))
                 except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                     log.warning("%s: %s (%s) failed: %r", self.source_key, company.name, company.slug, exc)
@@ -125,6 +127,9 @@ class AtsCollector:
                 client.close()
         if companies and len(self._incomplete) == len(companies):
             raise RuntimeError(f"every {self.source_key} company failed")
+
+    def fetch_company(self, client: httpx.Client, company: TrackedCompany) -> Any:
+        return self.fetch(client, company.slug)
 
     def fetch(self, client: httpx.Client, slug: str) -> Any:
         response = client.get(self.feed_url(slug))

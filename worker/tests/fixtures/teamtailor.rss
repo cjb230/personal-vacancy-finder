@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:tt="https://teamtailor.com/locations">
+  <channel>
+    <title>Acme jobs</title>
+    <item>
+      <title>Staff Data Engineer</title>
+      <description>&lt;p&gt;Trade power on &lt;b&gt;energy markets&lt;/b&gt;.&lt;/p&gt;&lt;p&gt;Python &amp;amp; SQL&lt;/p&gt;</description>
+      <pubDate>Tue, 06 Oct 2026 08:30:00 +0200</pubDate>
+      <link>https://jobs.acme.com/jobs/555-staff-data-engineer</link>
+      <remoteStatus>hybrid</remoteStatus>
+      <guid>https://jobs.acme.com/jobs/555-staff-data-engineer</guid>
+      <tt:locations>
+        <tt:location><tt:name>Stockholm HQ</tt:name><tt:city>Stockholm</tt:city><tt:country>Sweden</tt:country></tt:location>
+        <tt:location><tt:name>Berlin</tt:name><tt:city>Berlin</tt:city><tt:country>Germany</tt:country></tt:location>
+      </tt:locations>
+      <tt:department>Data</tt:department>
+      <tt:role>Engineering</tt:role>
+    </item>
+    <item>
+      <title>Engineering Lead</title>
+      <description></description>
+      <pubDate>Thu, 01 Oct 2026 10:00:00 +0000</pubDate>
+      <link>https://jobs.acme.com/jobs/556-engineering-lead</link>
+      <remoteStatus>fully</remoteStatus>
+      <guid>https://jobs.acme.com/jobs/556-engineering-lead</guid>
+    </item>
+  </channel>
+</rss>

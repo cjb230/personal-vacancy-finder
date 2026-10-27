@@ -1,5 +1,6 @@
 # Companies to check for a public ATS feed with `python -m vacancy_finder.probe --file seeds/candidates.txt`.
 # One per line; add known slugs as NAME=slug1,slug2. Hits go into companies.csv.
+# Teamtailor sites and plain careers pages can't be probed; add those to companies.csv by hand.
 # Space and Earth observation, Poland
 Creotech Instruments=creotech
 KP Labs=kplabs
@@ -21,15 +22,15 @@ Isar Aerospace=isaraerospace
 The Exploration Company=theexplorationcompany,exploration
 D-Orbit=dorbit
 Unseenlabs
-UP42
+UP42=up42gmbh
 EarthDaily Analytics=earthdaily
 Satellogic
 Spire Global=spire
 OHB
 Aerospacelab
 Kayhan Space
-Constellr
-LiveEO
+Constellr=constellrgmbh
+LiveEO=liveeo-gmbh
 Vyoma
 Reflex Aerospace
 Rocket Factory Augsburg=rfa
@@ -58,7 +59,7 @@ Entrix
 gridX
 Node Energy=nodeenergy
 # Robotics
-Nomagic
+Nomagic=Nomagic
 Exotec
 Agile Robots=agilerobots
 Wandelbots

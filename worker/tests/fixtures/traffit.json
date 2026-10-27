@@ -1,0 +1,16 @@
+[
+  {"url": "https://acme.traffit.com/public/job_posts/published/41?source=career_page", "id": 41,
+   "valid_start": "2026-10-03 10:20:00",
+   "options": {"remote": "1", "job_type": "B2B", "job_location": "{\"locality\":\"Warszawa\",\"country\":\"Poland\"}"},
+   "advert": {"name": "Python Team Lead", "language": "en",
+              "recruitment": {"nr_ref": "PY/10"},
+              "locations": [{"locality": "Warszawa", "country": "Poland", "iso": "PL"}],
+              "values": [{"field_id": "description", "value": "<p>Cloud for <b>EO data</b>.</p>"},
+                         {"field_id": "requirements", "value": "<p>Python</p>"}]}},
+  {"url": "https://acme.traffit.com/public/job_posts/published/42", "id": 42,
+   "valid_start": "2026-10-04 09:00:00",
+   "options": {"remote": "0"},
+   "advert": {"name": "Specjalista ds. kadr (hybrydowo)", "language": "pl",
+              "locations": [{"locality": "Kraków", "country": "Poland", "iso": "PL"}],
+              "values": []}}
+]
