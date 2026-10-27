@@ -288,52 +288,126 @@ _HN_WORK_MODE = re.compile(r"^\W*(remote|onsite|on-site|hybrid|in-office|in offi
 _HN_JOB_TYPE = re.compile(
     r"^\W*(full[- ]?time|part[- ]?time|contract(or)?|intern(ship)?|freelance|permanent|ft|pt)\W*$", re.I
 )
-_HN_PAY = re.compile(r"[$€£]\s?\d|\d\s?k\b|\b(salary|equity|comp)\b", re.I)
+_HN_PAY = re.compile(
+    r"[$€£]\s?\d|\d\s?k\b|\d\s?[$€£]|\b(usd|eur|gbp|pln|chf)\b|\b(salary|equity|comp)\b", re.I
+)
+_HN_URL = re.compile(r"https?://\S+|\bwww\.\S+|\b[\w-]+\.(com|io|ai|co|dev|org|net|tech|app)\b(/\S*)?", re.I)
+_HN_LANGUAGE_NEED = re.compile(
+    r"\b(german|dutch|french|polish|spanish|italian|swedish|danish|norwegian|finnish|japanese|"
+    r"mandarin|korean|portuguese|hebrew)\b.*\b(required|fluent|fluency|native|speaking|c1|c2|b2)\b",
+    re.I,
+)
+_HN_NOTE = re.compile(
+    r"\b(yc|y combinator|series [a-e]|seed|funded|backed|visa|sponsorship|relocation|"
+    r"equity|benefits|profitable|founded)\b", re.I
+)
 _HN_ROLE = re.compile(
     r"engineer|developer|manager|lead|director|head|architect|scientist|designer|cto|vp\b"
-    r"|staff|principal|researcher|analyst|devops|sre\b|founding|programmer",
+    r"|staff|principal|researcher|analyst|devops|devex|sre\b|swe\b|sde\b|mle\b|founding|programmer"
+    r"|roles|positions|openings|hiring|systems|infrastructure|platform|backend|back-end|frontend"
+    r"|front-end|full[- ]?stack|tooling|security|machine learning|\bml\b|\bai\b|data|product"
+    r"|operations|ops\b|sales|marketing|support|recruit|intern",
     re.I,
 )
-_HN_SEPARATORS = re.compile(r"\s+[|—–·]\s+|\s*\|\s*|\s+-\s+|\s+/\s+")
-_HN_PAY_RANGE = re.compile(
-    r"([$€£])\s?(\d+(?:[.,]\d+)?)\s?(k)?\s*(?:-|–|to)\s*[$€£]?\s?(\d+(?:[.,]\d+)?)\s?(k)?",
-    re.I,
-)
-_CURRENCY = {"$": "USD", "€": "EUR", "£": "GBP"}
+# "|" is the usual separator. Dashes and slashes only count when a line has no "|",
+# since they also appear inside names and roles ("Head of Development – AI Platform").
+_HN_PIPE = re.compile(r"\s*\|\s*")
+_HN_OTHER_SEPARATORS = re.compile(r"\s+[—–·]\s+|\s+-\s+|\s+/\s+")
+_HN_PARENS = re.compile(r"\(([^()]*)\)")
+
+_CURRENCY = {"$": "USD", "€": "EUR", "£": "GBP", "usd": "USD", "eur": "EUR", "gbp": "GBP",
+             "pln": "PLN", "chf": "CHF"}
+_NUM = r"(\d+(?:[.,]\d{3})*(?:\.\d+)?)\s?(k)?"
+_CUR = r"([$€£]|usd|eur|gbp|pln|chf)"
+_HN_PAY_PATTERNS = [
+    # $150k - $200k, €90,000 to €120,000, $150-200k
+    re.compile(_CUR + r"\s?" + _NUM + r"\s*(?:-|–|—|to)\s*" + _CUR + r"?\s?" + _NUM, re.I),
+    # 100–140k€, 120k-150k EUR, 90.000 - 110.000 €
+    re.compile(_NUM + r"\s*(?:-|–|—|to)\s*" + _NUM + r"\s?" + _CUR, re.I),
+]
+
+
+def _split_fields(line: str) -> list[str]:
+    splitter = _HN_PIPE if "|" in line else _HN_OTHER_SEPARATORS
+    return [p.strip() for p in splitter.split(line) if p and p.strip()]
 
 
 def split_hn_first_line(line: str) -> dict[str, Any]:
-    """Splits "Company | Role | Location | REMOTE | Full-time | $150k-$200k" style lines,
-    which posters write with |, —, -, / or · and in any order after the company."""
-    parts = [p.strip() for p in _HN_SEPARATORS.split(line) if p and p.strip()]
-    company = parts[0] if parts else ""
-    role, places, terms = None, [], []
-    for part in parts[1:]:
-        if _HN_WORK_MODE.match(part) or _HN_JOB_TYPE.match(part) or _HN_PAY.search(part):
-            terms.append(part)
-        elif role is None and _HN_ROLE.search(part):
-            role = part
+    """Splits "Company | Role | Location | REMOTE (EU) | Full-time | $150k-$200k" style lines,
+    which posters write with |, dashes, slashes or middots and in any order after the company.
+
+    Returns company, role (None when no field looks like one), places (including the region
+    from fields like "REMOTE (EU)"), terms (work mode, job type, pay), links, notes, and any
+    language requirement such as "German C1+ required".
+    """
+    fields = _split_fields(line)
+    out: dict[str, Any] = {"company": "", "role": None, "places": [], "terms": [], "links": [],
+                           "notes": [], "language_requirement": None}
+
+    def classify(field: str, after_company: bool) -> None:
+        if _HN_URL.fullmatch(field.strip("() ")):
+            out["links"].append(field.strip("() "))
+        elif _HN_WORK_MODE.match(field):
+            out["terms"].append(field)
+            # Keep the region of "REMOTE (EU)" or "Remote, Europe only" as a place.
+            region = _HN_PARENS.search(field)
+            rest = region.group(1) if region else _HN_WORK_MODE.sub("", field).strip(" ,:-()")
+            if rest and not _HN_JOB_TYPE.match(rest):
+                out["places"].append(rest)
+        elif _HN_JOB_TYPE.match(field) or _HN_PAY.search(field):
+            out["terms"].append(field)
+        elif _HN_LANGUAGE_NEED.search(field):
+            out["language_requirement"] = field
+        elif _HN_NOTE.search(field):
+            out["notes"].append(field)
+        elif after_company and out["role"] is None and _HN_ROLE.search(field):
+            out["role"] = field
         else:
-            places.append(part)
-    return {"company": company, "role": role, "places": places, "terms": terms}
+            out["places"].append(field)
+
+    if fields:
+        company = fields[0]
+        # Pull asides out of the company name: "Mainmatter ( https://… )", "Shepherd (Series B)",
+        # "PrairieLearn (Remote US)".
+        for aside in (a.strip() for a in _HN_PARENS.findall(company)):
+            if _HN_URL.fullmatch(aside) or _HN_WORK_MODE.match(aside):
+                classify(aside, after_company=False)
+            elif aside:
+                out["notes"].append(aside)
+        company = _HN_PARENS.sub("", company)
+        out["links"] += [m.group(0) for m in _HN_URL.finditer(company)]
+        company = _HN_URL.sub("", company)
+        out["company"] = re.sub(r"\s{2,}", " ", company).strip(" ,-")
+        for field in fields[1:]:
+            classify(field, after_company=True)
+    return out
 
 
 def hn_salary(line: str) -> dict[str, Any]:
-    match = _HN_PAY_RANGE.search(line)
-    if not match:
-        return {}
-    symbol, low, low_k, high, high_k = match.groups()
-    k = low_k or high_k
+    for pattern in _HN_PAY_PATTERNS:
+        match = pattern.search(line)
+        if not match:
+            continue
+        groups = match.groups()
+        if pattern is _HN_PAY_PATTERNS[0]:
+            currency, low, low_k, _, high, high_k = groups
+        else:
+            low, low_k, high, high_k, currency = groups
+        k = low_k or high_k
 
-    def amount(value: str) -> Decimal:
-        number = Decimal(value.replace(",", ""))
-        return number * 1000 if k else number
+        def amount(value: str) -> Decimal:
+            # "90,000" and "90.000" are thousands separators; "92.5k" is a decimal.
+            if re.fullmatch(r"\d+(?:[.,]\d{3})+", value):
+                value = re.sub(r"[.,]", "", value)
+            number = Decimal(value.replace(",", ""))
+            return number * 1000 if k else number
 
-    low_amount, high_amount = amount(low), amount(high)
-    if high_amount < 1000:  # an hourly rate or a stray number, not an annual salary
-        return {}
-    return {"salary_min": low_amount, "salary_max": high_amount,
-            "salary_currency": _CURRENCY[symbol], "salary_period": "year"}
+        low_amount, high_amount = amount(low), amount(high)
+        if high_amount < 1000:  # an hourly rate or a stray number, not an annual salary
+            continue
+        return {"salary_min": low_amount, "salary_max": high_amount,
+                "salary_currency": _CURRENCY[currency.lower()], "salary_period": "year"}
+    return {}
 
 
 class HackerNewsHiringCollector(FeedCollector):
@@ -379,7 +453,8 @@ class HackerNewsHiringCollector(FeedCollector):
             description=text,
             posted_at=from_iso(comment.get("created_at")),
             raw={"author": comment.get("author"), "thread": thread_title, "first_line": first_line,
-                 "terms": fields["terms"]},
+                 "terms": fields["terms"], "links": fields["links"], "notes": fields["notes"],
+                 "language_requirement": fields["language_requirement"]},
             **hn_salary(first_line),
         )
 

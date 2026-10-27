@@ -195,26 +195,43 @@ def test_hacker_news_picks_hiring_thread_and_parses_first_line():
     assert [x.external_id for x in postings] == ["49922609", "49522900"]
     p = postings[0]
     assert (p.company_name, p.title) == ("Sidekick Labs", "Senior SWE, R&D Engineer")
-    assert p.location_text is None
+    assert p.location_text == "US Timezones"
     assert p.raw["terms"] == ["REMOTE (US Timezones)", "Full-time", "$170k"]
     assert p.work_mode == "remote"
     assert p.url == "https://news.ycombinator.com/item?id=49922609"
     assert p.description.endswith("Sidekick builds AI security software.")
 
 
-@pytest.mark.parametrize("line, company, role, places, terms", [
+@pytest.mark.parametrize("line, company, role, places", [
     ("Sidekick Labs | Senior SWE, R&D Engineer | REMOTE (US Timezones) | Full-time | $170k to $230k",
-     "Sidekick Labs", "Senior SWE, R&D Engineer", [], ["REMOTE (US Timezones)", "Full-time", "$170k to $230k"]),
-    # Other separators, and the work mode before the role.
+     "Sidekick Labs", "Senior SWE, R&D Engineer", ["US Timezones"]),
+    # No "|": dashes separate fields. The region in "(Remote US)" is kept as a place.
     ("PrairieLearn (Remote US) \u2014 Full-Stack Software Engineer \u2014 Champaign",
-     "PrairieLearn (Remote US)", "Full-Stack Software Engineer", ["Champaign"], []),
-    ("Shepherd (Series B) | ONSITE | San Francisco, CA", "Shepherd (Series B)", None,
-     ["San Francisco, CA"], ["ONSITE"]),
-    ("Acme - Staff Engineer - Berlin - \u20ac90,000 - \u20ac120,000", "Acme", "Staff Engineer",
-     ["Berlin"], ["\u20ac90,000", "\u20ac120,000"]),
+     "PrairieLearn", "Full-Stack Software Engineer", ["US", "Champaign"]),
+    ("Shepherd (Series B) | ONSITE | San Francisco, CA", "Shepherd", None, ["San Francisco, CA"]),
+    ("Acme - Staff Engineer - Berlin - \u20ac90,000 - \u20ac120,000", "Acme", "Staff Engineer", ["Berlin"]),
+    # With "|" present, dashes stay inside names and roles.
+    ("Descartes - Finale Inventory | Senior Software Engineer | REMOTE | Full-Time",
+     "Descartes - Finale Inventory", "Senior Software Engineer", []),
+    ("S&T (s&t) | Head of Development \u2013 AI Agent Platform | REMOTE (Germany) | German C1+ required",
+     "S&T", "Head of Development \u2013 AI Agent Platform", ["Germany"]),
+    # URLs are links, not places; a URL in brackets is stripped from the company.
+    ("Mainmatter ( https://mainmatter.com/rust/ ) | REMOTE (EU) | Lead Rust Consultant | 100\u2013140k\u20ac",
+     "Mainmatter", "Lead Rust Consultant", ["EU"]),
+    ("Thunder Compute (YC S24) | C++ Systems, Infrastructure, BizOps | https://thundercompute.com | SF",
+     "Thunder Compute", "C++ Systems, Infrastructure, BizOps", ["SF"]),
 ])
-def test_split_hn_first_line(line, company, role, places, terms):
-    assert split_hn_first_line(line) == {"company": company, "role": role, "places": places, "terms": terms}
+def test_split_hn_first_line(line, company, role, places):
+    fields = split_hn_first_line(line)
+    assert (fields["company"], fields["role"], fields["places"]) == (company, role, places)
+
+
+def test_split_hn_first_line_keeps_links_notes_and_language_needs():
+    fields = split_hn_first_line(
+        "Hestus (YC W25) | ML Engineer | https://hestus.co/jobs | YC-funded | German C1+ required")
+    assert fields["links"] == ["https://hestus.co/jobs"]
+    assert fields["notes"] == ["YC W25", "YC-funded"]
+    assert fields["language_requirement"] == "German C1+ required"
 
 
 def test_hn_title_falls_back_to_first_line_without_a_role():
@@ -228,6 +245,10 @@ def test_hn_title_falls_back_to_first_line_without_a_role():
     ("Acme | Engineer | REMOTE | $170k to $230k", (170000, 230000, "USD")),
     ("Acme | Engineer | \u20ac90,000 - \u20ac120,000", (90000, 120000, "EUR")),
     ("Acme | Engineer | \u00a380k-\u00a3100k", (80000, 100000, "GBP")),
+    ("Mainmatter | Lead | 100\u2013140k\u20ac", (100000, 140000, "EUR")),
+    ("Acme | Engineer | 120k-150k EUR", (120000, 150000, "EUR")),
+    ("Acme | Engineer | 90.000 - 110.000 \u20ac", (90000, 110000, "EUR")),
+    ("Acme | Engineer | 25,000-32,000 PLN", (25000, 32000, "PLN")),
     ("Acme | Engineer | $60-$90/hr", None),
     ("Acme | Engineer | Remote", None),
 ])
