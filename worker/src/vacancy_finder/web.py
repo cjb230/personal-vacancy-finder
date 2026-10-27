@@ -1,5 +1,6 @@
 """A small results page: open jobs ranked by how well they match, with buttons to mark each
-one interested, not interested or applied. Served by the worker on WEB_PORT (8080), which
+one interested, not interested or applied, and feedback notes (reject for, rate higher or
+lower for, score higher or lower) kept with a snapshot of the ad for tuning later. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -19,6 +20,18 @@ log = logging.getLogger(__name__)
 
 PAGE_SIZE = 100
 DECISIONS = {"interested": "Interested", "not_interested": "Not interested", "applied": "Applied"}
+# Feedback kinds, as (label, takes a note). Notes are kept to improve the filters later;
+# score_higher/score_lower only record which way the weights should move for this job.
+FEEDBACK = {
+    "reject": ("Reject for:", True),
+    "rate_higher": ("Rate higher for:", True),
+    "rate_lower": ("Rate lower for:", True),
+    "score_higher": ("Score higher", False),
+    "score_lower": ("Score lower", False),
+}
+FEEDBACK_SHORT = {"reject": "Rejected", "rate_higher": "Rate higher", "rate_lower": "Rate lower",
+                  "score_higher": "Score higher", "score_lower": "Score lower"}
+NOTE_MAX = 2000
 VIEWS = {
     "match": ("Matches", "s.verdict = 'match' AND r.decision IS NULL"),
     "maybe": ("Maybes", "s.verdict = 'maybe' AND r.decision IS NULL"),
@@ -81,8 +94,20 @@ main { padding:8px 20px 40px; max-width:1100px; }
 .actions { margin-left:46px; } .actions button { font-size:12px; margin-right:4px; padding:3px 8px;
   border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; }
 .actions button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.feedback { margin:6px 0 0 46px; font-size:13px; }
+.feedback summary { color:var(--muted); cursor:pointer; }
+.feedback form { margin:4px 0; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.feedback label { min-width:110px; }
+.feedback input[type=text] { flex:1; min-width:180px; max-width:520px; padding:3px 6px;
+  border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+.feedback button, .notes button { font-size:12px; padding:2px 8px; border:1px solid var(--line);
+  border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; }
+.notes { margin:4px 0 0 46px; font-size:13px; }
+.notes form { display:inline; } .notes span { display:inline-block; border:1px solid var(--line);
+  border-radius:10px; padding:1px 4px 1px 8px; margin:2px 4px 2px 0; }
+.notes button { border:none; padding:0 4px; color:var(--muted); }
 .pager { margin-top:16px; } .empty { color:var(--muted); padding:24px 0; }
-@media (max-width:600px) { .meta, .reasons, .actions { margin-left:0; } }
+@media (max-width:600px) { .meta, .reasons, .actions, .feedback, .notes { margin-left:0; } }
 """
 
 
@@ -102,6 +127,12 @@ def render(view: str, q: str, page: int) -> str:
             QUERY.format(where=where),
             {"q": q, "like": f"%{q}%", "limit": PAGE_SIZE, "offset": page * PAGE_SIZE},
         ).fetchall()
+        notes: dict[int, list[tuple]] = {}
+        for job_id, feedback_id, kind, note in conn.execute(
+            "SELECT job_id, id, kind, note FROM job_feedback WHERE job_id = ANY(%s) ORDER BY id",
+            ([row[0] for row in rows],),
+        ):
+            notes.setdefault(job_id, []).append((feedback_id, kind, note))
 
     tabs = "".join(
         f'<a class="{"on" if key == view else ""}" href="/?{urlencode({"view": key, "q": q})}">'
@@ -118,8 +149,9 @@ def render(view: str, q: str, page: int) -> str:
         )
         clear = '<button name="decision" value="">Clear</button>' if decision else ""
         chips = "".join(f"<span>{esc(r)}</span>" for r in reasons)
+        back = esc(f"/?{urlencode({'view': view, 'q': q, 'page': page})}#job-{job_id}")
         jobs.append(f"""
-<div class="job {esc(verdict)}">
+<div class="job {esc(verdict)}" id="job-{job_id}">
   <div class="top"><span class="score">{score}</span>
     <span class="title"><a href="{esc(url)}" target="_blank" rel="noopener">{esc(job_title)}</a></span>
     <span>{esc(company)}</span></div>
@@ -128,8 +160,9 @@ def render(view: str, q: str, page: int) -> str:
   <div class="reasons">{chips}</div>
   <form class="actions" method="post" action="/review">
     <input type="hidden" name="job_id" value="{job_id}">
-    <input type="hidden" name="back" value="/?{esc(urlencode({"view": view, "q": q, "page": page}))}">
+    <input type="hidden" name="back" value="{back}">
     {buttons}{clear}</form>
+{render_notes(job_id, notes.get(job_id, []), back)}{render_feedback(job_id, back)}
 </div>""")
     pager = ""
     if len(rows) == PAGE_SIZE:
@@ -143,6 +176,81 @@ def render(view: str, q: str, page: int) -> str:
 <form class="search" method="get"><input type="hidden" name="view" value="{esc(view)}">
 <input name="q" value="{esc(q)}" placeholder="Search title or company"></form></nav></header>
 <main><h2 style="font-size:16px">{esc(title)}</h2>{body}{pager}</main></body></html>"""
+
+
+def render_notes(job_id: int, notes: list[tuple], back: str) -> str:
+    if not notes:
+        return ""
+    items = "".join(
+        f'<span>{esc(FEEDBACK_SHORT[kind])}{": " + esc(note) if note else ""}'
+        f'<form method="post" action="/feedback/delete"><input type="hidden" name="id" value="{fid}">'
+        f'<input type="hidden" name="back" value="{back}">'
+        f'<button title="Remove this note">×</button></form></span>'
+        for fid, kind, note in notes
+    )
+    return f'<div class="notes">{items}</div>'
+
+
+def render_feedback(job_id: int, back: str) -> str:
+    hidden = (f'<input type="hidden" name="job_id" value="{job_id}">'
+              f'<input type="hidden" name="back" value="{back}">')
+    fields = "".join(
+        f'<form method="post" action="/feedback">{hidden}<input type="hidden" name="kind" value="{kind}">'
+        f'<label for="{kind}-{job_id}">{esc(label)}</label>'
+        f'<input type="text" id="{kind}-{job_id}" name="note" maxlength="{NOTE_MAX}" required>'
+        f"<button>Save</button></form>"
+        for kind, (label, takes_note) in FEEDBACK.items() if takes_note
+    )
+    scores = "".join(
+        f'<button name="kind" value="{kind}">{esc(label)}</button>'
+        for kind, (label, takes_note) in FEEDBACK.items() if not takes_note
+    )
+    return (f'<details class="feedback"><summary>Feedback</summary>{fields}'
+            f'<form method="post" action="/feedback">{hidden}{scores}</form></details>')
+
+
+def save_feedback(job_id: int, kind: str, note: str = "") -> None:
+    """Records a note with a copy of the ad and its current score. A rejection also marks the
+    job not interested, so it leaves the Matches and Maybes lists."""
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO job_feedback (job_id, kind, note, title, company, ad_text, postings,
+                                      verdict, score, role_level, reasons)
+            SELECT j.id, %(kind)s, NULLIF(%(note)s, ''), j.title, c.name,
+                   (SELECT p.description FROM postings p WHERE p.job_id = j.id
+                    ORDER BY p.closed_at IS NULL DESC, p.last_seen_at DESC LIMIT 1),
+                   (SELECT coalesce(jsonb_agg(jsonb_build_object(
+                        'source', so.key, 'url', p.url, 'title', p.title,
+                        'company_name', p.company_name, 'location_text', p.location_text,
+                        'work_mode', p.work_mode, 'contract_type', p.contract_type,
+                        'salary_min', p.salary_min, 'salary_max', p.salary_max,
+                        'salary_currency', p.salary_currency, 'salary_period', p.salary_period,
+                        'language', p.language, 'posted_at', p.posted_at,
+                        'closed_at', p.closed_at, 'description', p.description)
+                        ORDER BY p.last_seen_at DESC), '[]')
+                    FROM postings p JOIN sources so ON so.id = p.source_id WHERE p.job_id = j.id),
+                   s.verdict, s.score, s.role_level, coalesce(s.reasons, '{}')
+            FROM jobs j
+            LEFT JOIN companies c ON c.id = j.company_id
+            LEFT JOIN job_scores s ON s.job_id = j.id
+            WHERE j.id = %(job_id)s
+            """,
+            {"job_id": job_id, "kind": kind, "note": note},
+        )
+        if kind == "reject":
+            conn.execute(
+                """
+                INSERT INTO job_reviews (job_id, decision) VALUES (%s, 'not_interested')
+                ON CONFLICT (job_id) DO UPDATE SET decision = EXCLUDED.decision, updated_at = now()
+                """,
+                (job_id,),
+            )
+
+
+def delete_feedback(feedback_id: int) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM job_feedback WHERE id = %s", (feedback_id,))
 
 
 def save_review(job_id: int, decision: str) -> None:
@@ -176,22 +284,33 @@ class Handler(BaseHTTPRequestHandler):
         self._send(HTTPStatus.OK, render(view, q, page))
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/review":
+        path = urlparse(self.path).path
+        if path not in ("/review", "/feedback", "/feedback/delete"):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        length = min(int(self.headers.get("Content-Length") or 0), 10_000)
+        length = min(int(self.headers.get("Content-Length") or 0), 20_000)
         form = parse_qs(self.rfile.read(length).decode())
-        decision = form.get("decision", [""])[0]
         back = form.get("back", ["/"])[0]
         try:
-            job_id = int(form["job_id"][0])
+            key = int(form["id" if path == "/feedback/delete" else "job_id"][0])
         except (KeyError, ValueError):
             self.send_error(HTTPStatus.BAD_REQUEST)
             return
-        if decision and decision not in DECISIONS:
-            self.send_error(HTTPStatus.BAD_REQUEST)
-            return
-        save_review(job_id, decision)
+        if path == "/review":
+            decision = form.get("decision", [""])[0]
+            if decision and decision not in DECISIONS:
+                self.send_error(HTTPStatus.BAD_REQUEST)
+                return
+            save_review(key, decision)
+        elif path == "/feedback":
+            kind = form.get("kind", [""])[0]
+            note = form.get("note", [""])[0].strip()[:NOTE_MAX]
+            if kind not in FEEDBACK or FEEDBACK[kind][1] != bool(note):
+                self.send_error(HTTPStatus.BAD_REQUEST)
+                return
+            save_feedback(key, kind, note)
+        else:
+            delete_feedback(key)
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Location", back if back.startswith("/") and not back.startswith("//") else "/")
         self.end_headers()
