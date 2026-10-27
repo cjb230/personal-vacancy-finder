@@ -330,7 +330,12 @@ _HN_PAY_PATTERNS = [
 
 # Labels some posters put before the first field: "Company: Acme | ...".
 _HN_LABEL = re.compile(r"^(company|employer|who|name)\s*:\s*", re.I)
-_HN_NOT_A_COMPANY = re.compile(r"^(location|role|position|title|remote|salary)\s*:", re.I)
+_HN_NOT_A_COMPANY = re.compile(
+    r"^((location|role|position|title|remote|salary)\s*:|hiring\b|looking for\b|i'm\b|i am\b"
+    r"|we're\b|we are\b|remote\b|etc\.?$)",
+    re.I,
+)
+_HN_HIRING_AT = re.compile(r"\bhiring at ([A-Z0-9][\w.&-]*(?: [A-Z0-9][\w.&-]*){0,3})")
 # A first field that is really a sentence: "Beacon AI builds intelligent systems that ...",
 # "At Tether we're hiring!". The capitalised words before the first lower-case word are
 # usually the name; "At", "We're" and similar openers mean there's none to take.
@@ -338,7 +343,9 @@ _HN_OPENERS = {"at", "we", "we're", "were", "our", "join", "hiring", "come", "th
 
 
 def hn_company(field: str) -> str:
-    field = _HN_LABEL.sub("", field.strip())
+    field = _HN_LABEL.sub("", field.strip().replace("\u2019", "'"))
+    if at := _HN_HIRING_AT.search(field):  # "We're hiring at Langfuse"
+        return at.group(1).strip(" ,.:;!-")
     if not field or _HN_NOT_A_COMPANY.match(field):
         return ""
     words = field.split()

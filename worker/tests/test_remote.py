@@ -254,6 +254,13 @@ def test_hn_title_falls_back_to_first_line_without_a_role():
     ("Location: Dubrovnik, Croatia", ""),
     ("Company: Acme Robotics", "Acme Robotics"),
     ("Loft Orbital", "Loft Orbital"),
+    ("We\u2019re hiring at Langfuse", "Langfuse"),
+    ("Hiring: Senior Software Engineers", ""),
+    ("I'm applying for the Growth Lead", ""),
+    ("Looking for a commercial co-founder", ""),
+    ("Remote Close", ""),
+    ("etc.", ""),
+    ("Comity Inc.", "Comity Inc."),
 ])
 def test_hn_company_from_sentence_or_label(field, company):
     assert hn_company(field) == company

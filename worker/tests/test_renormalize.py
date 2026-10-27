@@ -40,6 +40,8 @@ def test_old_keys_are_merged(conn):  # noqa: F811
     conn.commit()
 
     assert renormalize(conn) == (1, 1)
+    # The plainer of the two names left, not "Duck Duck Go Sp. z o.o."
+    assert conn.execute("SELECT name FROM companies").fetchone() == ("Duck Duck Go",)
     assert conn.execute("SELECT normalized_name, ats_slug, tracked, sectors FROM companies").fetchall() == [
         ("duckduckgo", "ddg", True, ["search"])
     ]

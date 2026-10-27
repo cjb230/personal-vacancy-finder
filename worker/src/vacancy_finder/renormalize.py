@@ -33,12 +33,16 @@ def _rekey_companies(conn: psycopg.Connection) -> int:
     groups: dict[str, list[int]] = defaultdict(list)
     for company_id, name, _ in rows:
         groups[normalize_company(name)].append(company_id)
+    names = {company_id: name for company_id, name, _ in rows}
 
     merged = 0
     for ids in groups.values():
         keep, *others = ids
         if others:
             _absorb_companies(conn, keep, others)
+            # The plainest spelling: "Capgemini" over "Capgemini Polska".
+            name = min((names[i] for i in ids), key=len)
+            conn.execute("UPDATE companies SET name = %s WHERE id = %s", (name, keep))
             merged += len(others)
     # Two passes, so no row takes a key that another row still holds.
     conn.execute("UPDATE companies SET normalized_name = 'tmp:' || id")
