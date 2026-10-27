@@ -7,7 +7,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from .models import RawPosting
-from .normalize import job_fingerprint, normalize_company
+from .normalize import detect_language, job_fingerprint, normalize_company
 
 
 def ensure_source(conn: psycopg.Connection, key: str, name: str, kind: str) -> int:
@@ -71,6 +71,8 @@ def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting
     company_id = ensure_company(conn, posting)
     job_id = ensure_job(conn, company_id, posting)
     fields = asdict(posting)
+    if fields["language"] is None:
+        fields["language"] = detect_language(posting.description)
     for unstored in ("ats_kind", "ats_slug"):
         fields.pop(unstored)
     fields["raw"] = Jsonb(fields["raw"])

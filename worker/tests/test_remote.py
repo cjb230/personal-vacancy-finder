@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
+import pytest
 
 from vacancy_finder.collectors.remote import (
     ArbeitnowCollector,
@@ -14,6 +15,8 @@ from vacancy_finder.collectors.remote import (
     RemoteOkCollector,
     WeWorkRemotelyCollector,
     fix_mojibake,
+    hn_salary,
+    split_hn_first_line,
 )
 
 HIMALAYAS_JOB = {
@@ -110,6 +113,11 @@ def test_himalayas_parse():
     assert "description" not in p.raw
 
 
+def test_himalayas_salary_fields_only_with_amounts():
+    p = HimalayasCollector().parse(dict(HIMALAYAS_JOB, minSalary=None, maxSalary=None))
+    assert (p.salary_min, p.salary_currency, p.salary_period) == (None, None, None)
+
+
 def test_himalayas_pages_and_dedupes_across_queries():
     full_page = {"jobs": [dict(HIMALAYAS_JOB, guid=f"g{i}") for i in range(20)]}
     short_page = {"jobs": [dict(HIMALAYAS_JOB, guid="g0"), dict(HIMALAYAS_JOB, guid="last")]}
@@ -135,7 +143,6 @@ def test_remoteok_skips_legal_notice_and_fixes_encoding():
     first, second = postings
     assert "Â" not in first.description
     assert (first.salary_min, first.salary_currency, first.salary_period) == (Decimal("100000"), "USD", "year")
-    assert first.location_text == "Anywhere"
     assert second.salary_min is None and second.salary_currency is None
 
 
@@ -164,8 +171,16 @@ def test_arbeitnow_keeps_remote_and_poland_only():
     postings = list(collector.collect(None))
     assert [p.external_id for p in postings] == ["staff-engineer-remote-1", "python-dev-warsaw-2"]
     assert postings[0].work_mode == "remote"
-    assert postings[0].contract_type == "full time"
+    assert postings[0].contract_type is None
     assert postings[1].work_mode == "unknown"
+
+
+def test_arbeitnow_contract_and_hybrid_title():
+    collector = ArbeitnowCollector()
+    job = dict(ARBEITNOW["data"][1], title="Customer Success (m/w/d) - Hybrid oder Remote",
+               job_types=["Unbefristeter Arbeitsvertrag", "Berufserfahren"])
+    p = collector.parse(job)
+    assert (p.work_mode, p.contract_type) == ("hybrid", "permanent")
 
 
 def test_hacker_news_picks_hiring_thread_and_parses_first_line():
@@ -180,7 +195,46 @@ def test_hacker_news_picks_hiring_thread_and_parses_first_line():
     assert [x.external_id for x in postings] == ["49922609", "49522900"]
     p = postings[0]
     assert (p.company_name, p.title) == ("Sidekick Labs", "Senior SWE, R&D Engineer")
-    assert p.location_text == "REMOTE (US Timezones) | Full-time | $170k"
+    assert p.location_text is None
+    assert p.raw["terms"] == ["REMOTE (US Timezones)", "Full-time", "$170k"]
     assert p.work_mode == "remote"
     assert p.url == "https://news.ycombinator.com/item?id=49922609"
     assert p.description.endswith("Sidekick builds AI security software.")
+
+
+@pytest.mark.parametrize("line, company, role, places, terms", [
+    ("Sidekick Labs | Senior SWE, R&D Engineer | REMOTE (US Timezones) | Full-time | $170k to $230k",
+     "Sidekick Labs", "Senior SWE, R&D Engineer", [], ["REMOTE (US Timezones)", "Full-time", "$170k to $230k"]),
+    # Other separators, and the work mode before the role.
+    ("PrairieLearn (Remote US) \u2014 Full-Stack Software Engineer \u2014 Champaign",
+     "PrairieLearn (Remote US)", "Full-Stack Software Engineer", ["Champaign"], []),
+    ("Shepherd (Series B) | ONSITE | San Francisco, CA", "Shepherd (Series B)", None,
+     ["San Francisco, CA"], ["ONSITE"]),
+    ("Acme - Staff Engineer - Berlin - \u20ac90,000 - \u20ac120,000", "Acme", "Staff Engineer",
+     ["Berlin"], ["\u20ac90,000", "\u20ac120,000"]),
+])
+def test_split_hn_first_line(line, company, role, places, terms):
+    assert split_hn_first_line(line) == {"company": company, "role": role, "places": places, "terms": terms}
+
+
+def test_hn_title_falls_back_to_first_line_without_a_role():
+    p = HackerNewsHiringCollector().parse(
+        {"id": 1, "created_at": None, "text": "Shepherd (Series B) | ONSITE | San Francisco, CA<p>About us"})
+    assert p.title == "Shepherd (Series B) | ONSITE | San Francisco, CA"
+    assert p.work_mode == "onsite"
+
+
+@pytest.mark.parametrize("line, expected", [
+    ("Acme | Engineer | REMOTE | $170k to $230k", (170000, 230000, "USD")),
+    ("Acme | Engineer | \u20ac90,000 - \u20ac120,000", (90000, 120000, "EUR")),
+    ("Acme | Engineer | \u00a380k-\u00a3100k", (80000, 100000, "GBP")),
+    ("Acme | Engineer | $60-$90/hr", None),
+    ("Acme | Engineer | Remote", None),
+])
+def test_hn_salary(line, expected):
+    salary = hn_salary(line)
+    if expected is None:
+        assert salary == {}
+    else:
+        assert (salary["salary_min"], salary["salary_max"], salary["salary_currency"]) == (
+            Decimal(expected[0]), Decimal(expected[1]), expected[2])

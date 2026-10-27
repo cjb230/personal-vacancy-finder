@@ -50,23 +50,38 @@ def job_fingerprint(company_name: str, title: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
-# Very common Polish words, to spot adverts written in Polish.
-_POLISH_WORDS = {
-    "i", "w", "z", "na", "do", "dla", "oraz", "jest", "się", "nie", "jako", "przez",
-    "lub", "od", "że", "pracy", "doświadczenie", "wymagania", "oferujemy", "zespołu",
-    "obowiązki", "znajomość", "praca", "będzie", "naszego", "twoje",
+# Very common words per language, to tell which language an advert is written in.
+_LANGUAGE_WORDS = {
+    "pl": {
+        "i", "w", "z", "na", "do", "dla", "oraz", "jest", "się", "nie", "jako", "przez",
+        "lub", "od", "że", "pracy", "doświadczenie", "wymagania", "oferujemy", "zespołu",
+        "obowiązki", "znajomość", "praca", "będzie", "naszego", "twoje",
+    },
+    "de": {
+        "und", "der", "die", "das", "mit", "für", "wir", "sie", "du", "ist", "von", "zu",
+        "den", "eine", "ein", "bei", "auf", "dich", "uns", "deine", "unsere", "aufgaben",
+        "erfahrung", "kenntnisse", "bieten",
+    },
+    "en": {
+        "the", "and", "of", "to", "in", "for", "with", "you", "we", "our", "is", "are",
+        "will", "experience", "team", "your", "requirements", "on", "as", "be",
+    },
 }
-_ENGLISH_WORDS = {
-    "the", "and", "of", "to", "in", "for", "with", "you", "we", "our", "is", "are",
-    "will", "experience", "team", "your", "requirements", "on", "as", "be",
-}
+
+
+def detect_language(text: str | None) -> str | None:
+    """'en', 'pl' or 'de' by counting common words; None when there is too little text."""
+    if not text:
+        return None
+    words = re.findall(r"[a-zäöüßąćęłńóśźż]+", text.lower())
+    scores = {lang: sum(w in vocab for w in words) for lang, vocab in _LANGUAGE_WORDS.items()}
+    best = max(scores, key=scores.get)
+    if scores[best] < 3:
+        return None
+    # Ties go to English: adverts often mix English terms into other languages.
+    return best if scores[best] > scores["en"] else "en"
 
 
 def looks_polish(text: str | None) -> bool:
     """True when an advert is mostly Polish rather than English."""
-    if not text:
-        return False
-    words = re.findall(r"[a-ząćęłńóśźż]+", text.lower())
-    polish = sum(w in _POLISH_WORDS for w in words)
-    english = sum(w in _ENGLISH_WORDS for w in words)
-    return polish > english
+    return detect_language(text) == "pl"

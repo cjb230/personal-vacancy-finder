@@ -28,7 +28,7 @@ import httpx
 import psycopg
 
 from ..models import RawPosting
-from ..normalize import looks_polish
+from ..normalize import detect_language
 from .ats import USER_AGENT, clean, from_iso, html_to_text
 
 log = logging.getLogger(__name__)
@@ -160,7 +160,7 @@ def parse_offer_page(page: str, entry: SitemapEntry) -> RawPosting | None:
 
     description = html_to_text(posting.get("description"))
     # The language the advert is written in. (offer["languages"] is what the job requires.)
-    language = "pl" if looks_polish(description) else "en"
+    language = detect_language(description)
 
     return RawPosting(
         external_id=entry.slug,

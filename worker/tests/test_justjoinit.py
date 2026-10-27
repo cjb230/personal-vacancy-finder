@@ -9,7 +9,7 @@ from vacancy_finder.collectors.justjoinit import (
     parse_sitemap,
     pick_salary,
 )
-from vacancy_finder.normalize import looks_polish
+from vacancy_finder.normalize import detect_language, looks_polish
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SLUG = "shelf-senior-backend-python-engineer-warszawa-python-a3b545e2"
@@ -100,3 +100,10 @@ def test_looks_polish():
     assert looks_polish("Wymagania: doświadczenie w Python oraz znajomość SQL. Oferujemy pracę w zespole.")
     assert not looks_polish("You will lead the team and own the platform. Experience with Python.")
     assert not looks_polish(None)
+
+
+def test_detect_language():
+    assert detect_language("Du kennst den Praxisalltag und wir bieten dir eine Rolle mit Erfahrung.") == "de"
+    assert detect_language("Wymagania: doświadczenie oraz znajomość SQL w zespole.") == "pl"
+    assert detect_language("You will lead the team and own the platform.") == "en"
+    assert detect_language("Python, SQL") is None

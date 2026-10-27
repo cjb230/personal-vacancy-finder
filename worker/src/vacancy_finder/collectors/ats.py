@@ -74,6 +74,8 @@ def guess_work_mode(*texts: str | None) -> str:
         return "hybrid"
     if "remote" in joined:
         return "remote"
+    if re.search(r"\b(on-?site|in-?office|in the office|office-based)\b", joined):
+        return "onsite"
     return "unknown"
 
 
