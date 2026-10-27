@@ -28,6 +28,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-vacancies}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-vacancies}
       RUN_INTERVAL_MINUTES: ${RUN_INTERVAL_MINUTES:-360}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JUSTJOINIT_KEYWORDS: ${JUSTJOINIT_KEYWORDS:-}
+      JUSTJOINIT_DELAY_SECONDS: ${JUSTJOINIT_DELAY_SECONDS:-2}
+      JUSTJOINIT_MAX_PAGES: ${JUSTJOINIT_MAX_PAGES:-500}
     volumes:
       # Mounted so edits to the company list apply on the next cycle without a rebuild.
       - ./worker/seeds:/app/seeds:ro

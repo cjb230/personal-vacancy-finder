@@ -57,7 +57,13 @@ def clean(value: str | None) -> str | None:
     """Some feeds HTML-escape plain fields, e.g. "R&amp;D" in a title."""
     if value is None:
         return None
-    return html.unescape(value).strip() or None
+    # Unescape until stable: some sources escape twice ("&amp;amp;").
+    for _ in range(3):
+        unescaped = html.unescape(value)
+        if unescaped == value:
+            break
+        value = unescaped
+    return value.strip() or None
 
 
 def guess_work_mode(*texts: str | None) -> str:

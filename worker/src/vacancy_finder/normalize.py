@@ -48,3 +48,25 @@ def job_fingerprint(company_name: str, title: str) -> str:
     """
     key = f"{normalize_company(company_name)}|{normalize_title(title)}"
     return hashlib.sha256(key.encode()).hexdigest()[:32]
+
+
+# Very common Polish words, to spot adverts written in Polish.
+_POLISH_WORDS = {
+    "i", "w", "z", "na", "do", "dla", "oraz", "jest", "się", "nie", "jako", "przez",
+    "lub", "od", "że", "pracy", "doświadczenie", "wymagania", "oferujemy", "zespołu",
+    "obowiązki", "znajomość", "praca", "będzie", "naszego", "twoje",
+}
+_ENGLISH_WORDS = {
+    "the", "and", "of", "to", "in", "for", "with", "you", "we", "our", "is", "are",
+    "will", "experience", "team", "your", "requirements", "on", "as", "be",
+}
+
+
+def looks_polish(text: str | None) -> bool:
+    """True when an advert is mostly Polish rather than English."""
+    if not text:
+        return False
+    words = re.findall(r"[a-ząćęłńóśźż]+", text.lower())
+    polish = sum(w in _POLISH_WORDS for w in words)
+    english = sum(w in _ENGLISH_WORDS for w in words)
+    return polish > english
