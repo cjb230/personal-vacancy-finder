@@ -1,4 +1,5 @@
-"""Worker entry point: migrate the database, then run all collectors on a fixed interval."""
+"""Worker entry point: migrate the database, serve the results page, then run all collectors
+and rescore the jobs on a fixed interval."""
 
 import logging
 import time
@@ -7,10 +8,12 @@ import psycopg
 
 from .collectors import COLLECTORS
 from .config import load_settings
+from .matching import score_all
 from .migrate import apply_migrations
 from .renormalize import renormalize
 from .runner import run_all
 from .seeds import load_companies
+from .web import serve
 
 log = logging.getLogger("vacancy_finder")
 
@@ -25,12 +28,15 @@ def main() -> None:
         applied = apply_migrations(conn, settings.migrations_dir)
         log.info("Database ready (%d new migrations)", len(applied))
         renormalize(conn)  # in case the company/job matching rules changed
+        score_all(conn)  # in case the scoring rules changed
+    serve()
 
     while True:
         with psycopg.connect(settings.database_url) as conn:
             # Re-read each cycle so edits to the seed file apply without a restart.
             load_companies(conn, settings.seeds_file)
             run_all(conn, COLLECTORS)
+            score_all(conn)
         log.info("Sleeping %d minutes", settings.run_interval_minutes)
         time.sleep(settings.run_interval_minutes * 60)
 

@@ -34,6 +34,10 @@ services:
       HIMALAYAS_QUERIES: ${HIMALAYAS_QUERIES:-}
       HIMALAYAS_MAX_PAGES: ${HIMALAYAS_MAX_PAGES:-5}
       ARBEITNOW_MAX_PAGES: ${ARBEITNOW_MAX_PAGES:-10}
+      WEB_HOST: 0.0.0.0  # inside the container; published on 127.0.0.1 only, below
+    ports:
+      # The results page, on this machine only: http://localhost:8080
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
     volumes:
       # Mounted so edits to the company list apply on the next cycle without a rebuild.
       - ./worker/seeds:/app/seeds:ro
