@@ -15,6 +15,7 @@ from vacancy_finder.collectors.remote import (
     RemoteOkCollector,
     WeWorkRemotelyCollector,
     fix_mojibake,
+    hn_company,
     hn_salary,
     split_hn_first_line,
 )
@@ -242,6 +243,27 @@ def test_hn_title_falls_back_to_first_line_without_a_role():
     assert p.title == "Open roles (see post)"
     assert p.company_name == "Shepherd"
     assert p.work_mode == "onsite"
+    assert p.unique_job  # never merged with other "see post" postings
+
+
+@pytest.mark.parametrize("field, company", [
+    ("Beacon AI builds intelligent systems that make aviation safer for every pilot", "Beacon AI"),
+    ("At Tether we're hiring! We envision a world where finance is free", "Tether"),
+    ("We're hiring software engineers, product designers, and design engineers at the IRS!", ""),
+    ("Company:", ""),
+    ("Location: Dubrovnik, Croatia", ""),
+    ("Company: Acme Robotics", "Acme Robotics"),
+    ("Loft Orbital", "Loft Orbital"),
+    ("We\u2019re hiring at Langfuse", "Langfuse"),
+    ("Hiring: Senior Software Engineers", ""),
+    ("I'm applying for the Growth Lead", ""),
+    ("Looking for a commercial co-founder", ""),
+    ("Remote Close", ""),
+    ("etc.", ""),
+    ("Comity Inc.", "Comity Inc."),
+])
+def test_hn_company_from_sentence_or_label(field, company):
+    assert hn_company(field) == company
 
 
 @pytest.mark.parametrize("line, expected", [
