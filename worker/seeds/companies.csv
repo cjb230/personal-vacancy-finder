@@ -1,1 +1,17 @@
 name,sectors,ats_kind,ats_slug,website,notes
+ICEYE,space;earth-observation,ashby,iceye,https://www.iceye.com,SAR satellites; has a Polish office
+Planet Labs,space;earth-observation,greenhouse,planetlabs,https://www.planet.com,
+Isar Aerospace,space;launch,greenhouse,isaraerospace,https://www.isaraerospace.com,
+The Exploration Company,space,ashby,the-exploration-company,https://www.exploration.space,
+Spire Global,space;earth-observation;weather,greenhouse,spire,https://spire.com,
+Loft Orbital,space,lever,loftorbital,https://www.loftorbital.com,
+Enpal,green-tech;energy,ashby,enpal,https://www.enpal.de,
+1Komma5,green-tech;energy,workable,1komma5grad,https://1komma5.com,
+Modo Energy,energy-markets,greenhouse,modoenergy,https://modoenergy.com,
+Exotec,robotics,workable,exotec,https://www.exotec.com,
+Agile Robots,robotics,workable,agile-robots,https://www.agile-robots.com,
+RobCo,robotics,ashby,robco,https://www.robco.de,
+Docplanner,health,ashby,docplanner,https://www.docplanner.com,Polish origin
+Preply,edtech,ashby,preply,https://preply.com,
+Babbel,edtech,ashby,babbel,https://www.babbel.com,
+Brainly,edtech,ashby,brainly,https://brainly.com,Polish origin

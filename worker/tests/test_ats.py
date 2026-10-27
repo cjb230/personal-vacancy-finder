@@ -33,6 +33,7 @@ def test_greenhouse():
     assert first.description == "Build & run our ground segment .\nPython"
     assert first.posted_at == datetime(2026, 10, 1, 13, 0, tzinfo=UTC)
     assert (first.ats_kind, first.ats_slug) == ("greenhouse", "acme")
+    assert second.title == "Engineering Manager, R&D"
     assert second.work_mode == "remote"
     assert second.description is None
 

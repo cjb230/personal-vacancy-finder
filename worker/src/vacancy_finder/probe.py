@@ -57,8 +57,11 @@ def probe(client: httpx.Client, name: str, extra_slugs: list[str]) -> list[tuple
                 payload = collector.fetch(client, slug)
             except (httpx.HTTPError, ValueError):
                 continue
-            # Some feeds answer unknown slugs with an empty board rather than a 404.
             if isinstance(payload, dict) and "jobs" not in payload:
+                continue
+            # Workable and Ashby answer made-up slugs with an empty board rather than a 404,
+            # so an empty board is not evidence of a match.
+            if count_jobs(payload) == 0:
                 continue
             hits.append(
                 (collector.source_key, slug, count_jobs(payload),

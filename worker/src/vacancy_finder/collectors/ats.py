@@ -53,6 +53,13 @@ def html_to_text(fragment: str | None) -> str | None:
     return re.sub(r"\s*\n\s*", "\n", text).strip()
 
 
+def clean(value: str | None) -> str | None:
+    """Some feeds HTML-escape plain fields, e.g. "R&amp;D" in a title."""
+    if value is None:
+        return None
+    return html.unescape(value).strip() or None
+
+
 def guess_work_mode(*texts: str | None) -> str:
     """Fallback for feeds without a structured field: look for the words in location text."""
     joined = " ".join(t for t in texts if t).lower()
@@ -135,9 +142,9 @@ class GreenhouseCollector(AtsCollector):
             yield RawPosting(
                 external_id=f"{company.slug}:{job['id']}",
                 url=job["absolute_url"],
-                title=job["title"].strip(),
+                title=clean(job["title"]) or "(untitled)",
                 company_name=company.name,
-                location_text=location,
+                location_text=clean(location),
                 work_mode=guess_work_mode(location, job["title"]),
                 description=html_to_text(job.get("content")),
                 posted_at=from_iso(job.get("first_published") or job.get("updated_at")),
@@ -170,9 +177,9 @@ class LeverCollector(AtsCollector):
             yield RawPosting(
                 external_id=f"{company.slug}:{job['id']}",
                 url=job["hostedUrl"],
-                title=job["text"].strip(),
+                title=clean(job["text"]) or "(untitled)",
                 company_name=company.name,
-                location_text=location,
+                location_text=clean(location),
                 work_mode=self._WORKPLACE.get(job.get("workplaceType") or "")
                 or guess_work_mode(location, job["text"]),
                 description=job.get("descriptionPlain") or html_to_text(job.get("description")),
@@ -220,9 +227,9 @@ class AshbyCollector(AtsCollector):
             yield RawPosting(
                 external_id=f"{company.slug}:{job['id']}",
                 url=job.get("jobUrl") or job["applyUrl"],
-                title=job["title"].strip(),
+                title=clean(job["title"]) or "(untitled)",
                 company_name=company.name,
-                location_text=location,
+                location_text=clean(location),
                 work_mode=work_mode,
                 description=job.get("descriptionPlain") or html_to_text(job.get("descriptionHtml")),
                 contract_type=job.get("employmentType"),
@@ -253,9 +260,9 @@ class WorkableCollector(AtsCollector):
             yield RawPosting(
                 external_id=f"{company.slug}:{job['shortcode']}",
                 url=job.get("url") or job["shortlink"],
-                title=job["title"].strip(),
+                title=clean(job["title"]) or "(untitled)",
                 company_name=company.name,
-                location_text=location,
+                location_text=clean(location),
                 work_mode="remote" if job.get("telecommuting") else guess_work_mode(location),
                 description=html_to_text(job.get("description")),
                 contract_type=job.get("employment_type") or None,
