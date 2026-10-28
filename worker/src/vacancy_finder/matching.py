@@ -7,7 +7,8 @@ The criteria (see the project notes, 2026-10-26):
 - Sectors: space (incl. Earth observation, GIS) first; energy, green tech, health, edtech,
   robotics next. Never tobacco or gambling / free-to-play games.
 - English adverts only, and no requirement to speak Polish or another language.
-- Prefers B2B; previous rate 210 PLN/hour.
+- Prefers B2B; previous rate 210 PLN/hour. Pay is compared as take-home: a salary is assumed
+  to be a permanent contract (umowa o pracę) unless the posting says B2B.
 
 Each rule adds or subtracts points and explains itself in `reasons`. A hard "no" (wrong
 language, non-engineering role, location ruled out, excluded sector) makes the verdict
@@ -79,6 +80,15 @@ DIRECTOR_EXPERIENCE = _rx(
     r"|experience (as|in) (a |an )?(director|vp)[- ]level)"
 )
 
+# Roles that are mainly another stack, a vendor platform, or ops work.
+OTHER_STACK_TITLE = _rx(
+    r"\bjava\b|c\+\+|c#|\.net\b|\bgolang\b|\bgo\b(?!-)|\brust\b|\breact\b|front[- ]?end"
+    r"|\bmobile\b|\bios\b|\bandroid\b|\bkotlin\b|\bswift\b|\bphp\b|\bruby\b|\brails\b"
+    r"|\bscala\b|\bnode(\.?js)?\b|\bangular\b|\bvue\b|typescript|javascript|\bsalesforce\b"
+    r"|\bsap\b|\bveeva\b|\bavaloq\b|\bservicenow\b|\bdynamics\b|\bguidewire\b|\bpega\b"
+)
+OPS_TITLE = _rx(r"devops|\bsre\b|site reliability|sys\.? ?admin|system administrat")
+
 # --- tech ------------------------------------------------------------------------------------
 
 PYTHON = _rx(r"\bpython\b|\bdjango\b|\bfastapi\b|\bflask\b|\bpandas\b")
@@ -99,13 +109,18 @@ LANGUAGE_NAMES = {"pl": "Polish", "de": "German", "es": "Spanish", "pt": "Portug
 # --- location --------------------------------------------------------------------------------
 
 WARSAW = _rx(r"warsaw|warszawa")
-POLAND = _rx(r"poland|polska|\bpl\b|krak[oó]w|wroc[lł]aw|gda[nń]sk|pozna[nń]|[lł][oó]d[zź]"
+POLAND = _rx(r"poland|polska|\bpl\b|warsaw|warszawa|krak[oó]w|wroc[lł]aw|gda[nń]sk|pozna[nń]|[lł][oó]d[zź]"
              r"|katowice|gliwice|szczecin|lublin|bia[lł]ystok|rzesz[oó]w|toru[nń]|bydgoszcz")
 EUROPE_OK = _rx(r"europe|\beu\b|emea|\bcet\b|cest|poland|worldwide|anywhere|global|international")
 REMOTE_ELSEWHERE_ONLY = _rx(
     r"\b(us|usa|u\.s\.|united states|north america|canada|latam|latin america|south america|apac"
     r"|asia|australia|new zealand|india|brazil|mexico|philippines|uk only|us[- ]based|latam only"
     r"|(us|pst|est|pacific|eastern) time ?zones?|pst|pacific time)\b"
+)
+# The headline of a post with no location field, e.g. "Remote (US) Close | Senior Engineer".
+REMOTE_REGION_HEADLINE = _rx(
+    r"remote\W{1,3}(us|usa|u\.s\.|united states|north america|canada|latam|latin america|apac"
+    r"|asia|australia|india|brazil|uk)\b"
 )
 TIME_ZONE_OVERLAP = _rx(
     r"\b(pst|pdt|est|edt|cst|pacific|eastern|central) (time|hours)|\b(us|u\.s\.|american|"
@@ -146,9 +161,13 @@ GOOD_WORDS = _rx(r"\benergy\b|power grid|\bgrid\b|solar|battery|batteries|renewa
                  r"|carbon|robot\w*|health\w*|medical|clinical|edtech|education|learning")
 # Descriptions mention "this space", "office space", "health insurance" and "education budget",
 # so they only count with phrases that are about the business itself.
-SPACE_PHRASES = _rx(r"satellites?\b(?! office)|earth observation|geospatial|remote sensing"
+SPACE_PHRASES = _rx(r"earth observation|geospatial|remote sensing"
                     r"|spacecraft|space (industry|sector|company|mission|systems|technology|tech)"
                     r"|new ?space\b|\bgis\b|launch vehicle|in-orbit")
+# "Satellite" alone can be a bank's satellite systems, so it needs a space word in the sentence.
+SATELLITE_PHRASE = _rx(r"satellites?\b(?! office)[^.\n]{0,80}\b(orbit\w*|launch\w*|imagery|constellation"
+                       r"|ground station|payload|earth|space)\b|\b(orbit\w*|launch\w*|imagery"
+                       r"|constellation|ground station|payload|earth|space)\b[^.\n]{0,80}satellites?\b")
 GOOD_PHRASES = _rx(r"energy (company|market|trading|transition|storage|sector)|renewable energy"
                    r"|solar (energy|power|panels?)|battery storage|climate tech|cleantech|green tech"
                    r"|health ?tech|digital health|medtech|healthcare (company|platform|provider)"
@@ -158,10 +177,48 @@ EXCLUDED_WORDS = _rx(r"tobacco|nicotine|vaping|\bvape\b|casino|gambling|betting|
 
 # --- pay -------------------------------------------------------------------------------------
 
+B2B_CONTRACTS = ("b2b", "contract")  # "contract" also covers "contractor"
 TO_PLN = {"PLN": 1, "EUR": Decimal("4.3"), "USD": Decimal("4.0"), "GBP": Decimal("5.0"),
           "CHF": Decimal("4.5")}
 MONTHLY = {"hour": 168, "day": 21, "month": 1, "year": Decimal(1) / 12}
-TARGET_MONTHLY_PLN = 210 * 168  # James's previous rate, full time
+# Take-home on B2B: James's estimate of ZUS, then 11% income tax.
+B2B_ZUS_MONTHLY = 2650
+B2B_TAX = Decimal("0.11")
+# Take-home on a permanent contract (umowa o pracę), worked out over a year with 2026 rules:
+# employee social contributions (pension and disability stop at the yearly cap), 9% health on
+# what's left, and 12% / 32% income tax after standard costs and the tax-free amount.
+UOP_PENSION_DISABILITY = Decimal("0.1126")
+UOP_SICKNESS = Decimal("0.0245")
+UOP_SOCIAL_CAP = 282_600
+UOP_HEALTH = Decimal("0.09")
+UOP_COSTS = 250 * 12
+UOP_TAX_THRESHOLD = 120_000
+UOP_TAX_REDUCTION = 3_600
+
+
+def b2b_take_home(monthly: Decimal) -> Decimal:
+    return max(Decimal(monthly) - B2B_ZUS_MONTHLY, Decimal(0)) * (1 - B2B_TAX)
+
+
+def uop_take_home(monthly: Decimal) -> Decimal:
+    gross = Decimal(monthly) * 12
+    social = UOP_PENSION_DISABILITY * min(gross, UOP_SOCIAL_CAP) + UOP_SICKNESS * gross
+    health = UOP_HEALTH * (gross - social)
+    base = max(gross - social - UOP_COSTS, Decimal(0))
+    tax = (Decimal("0.12") * min(base, UOP_TAX_THRESHOLD)
+           + Decimal("0.32") * max(base - UOP_TAX_THRESHOLD, 0) - UOP_TAX_REDUCTION)
+    return (gross - social - health - max(tax, Decimal(0))) / 12
+
+
+def take_home(monthly: Decimal, contract: str | None) -> Decimal:
+    """Monthly take-home for a posting's pay: B2B if the posting says so, otherwise UoP."""
+    if contract and any(kind in contract.lower() for kind in B2B_CONTRACTS):
+        return b2b_take_home(monthly)
+    return uop_take_home(monthly)
+
+
+# James's previous rate, full time on B2B, as take-home.
+TARGET_TAKE_HOME_PLN = b2b_take_home(Decimal(210 * 168))
 
 
 @dataclass
@@ -179,7 +236,7 @@ class JobFacts:
     languages: set[str | None] = field(default_factory=set)
     required_languages: set[str] = field(default_factory=set)
     contract_types: set[str] = field(default_factory=set)
-    monthly_pln_max: Decimal | None = None
+    take_home_max: Decimal | None = None  # monthly take-home in PLN, best of the postings
 
 
 @dataclass
@@ -226,6 +283,12 @@ def score_job(job: JobFacts) -> Score:
             break
     if NON_ENGINEERING.search(role_title) or not ENGINEERING.search(role_title):
         blockers.append("not an engineering role")
+    if OTHER_STACK_TITLE.search(role_title) and not PYTHON.search(role_title):
+        points -= 15
+        reasons.append("title names another stack or platform (-15)")
+    if OPS_TITLE.search(role_title):
+        points -= 15
+        reasons.append("DevOps / SRE / sysadmin role (-15)")
     if role_level == "director" and DIRECTOR_EXPERIENCE.search(text):
         points -= 20
         reasons.append("asks for previous director experience (-20)")
@@ -257,6 +320,9 @@ def score_job(job: JobFacts) -> Score:
         and not (EUROPE_WIDE.search(place) or POLAND.search(place)
                  or OTHER_EU_COUNTRY.search(place))
     )
+    if not place and text and (headline := REMOTE_REGION_HEADLINE.search(text.split("\n", 1)[0])):
+        place = headline.group(1)
+        outside_europe = True
     if "remote" in modes:
         if outside_europe:
             points += 5
@@ -308,7 +374,8 @@ def score_job(job: JobFacts) -> Score:
     if sectors & TOP_SECTORS:
         points += 25
         reasons.append("space / Earth observation company (+25)")
-    elif SPACE_WORDS.search(f"{title}\n{job.company or ''}") or SPACE_PHRASES.search(text):
+    elif (SPACE_WORDS.search(f"{title}\n{job.company or ''}") or SPACE_PHRASES.search(text)
+          or SATELLITE_PHRASE.search(text)):
         points += 15
         reasons.append("space / satellite / GIS work (+15)")
     elif sectors & GOOD_SECTORS:
@@ -322,14 +389,14 @@ def score_job(job: JobFacts) -> Score:
     if any("b2b" in c for c in job.contract_types):
         points += 5
         reasons.append("B2B possible (+5)")
-    if job.monthly_pln_max is not None:
-        monthly = int(job.monthly_pln_max)
-        if monthly >= TARGET_MONTHLY_PLN * 0.85:
+    if job.take_home_max is not None:
+        monthly = int(job.take_home_max)
+        if monthly >= TARGET_TAKE_HOME_PLN * Decimal("0.85"):
             points += 10
-            reasons.append(f"pay up to ~{monthly:,} PLN/month (+10)")
-        elif monthly < TARGET_MONTHLY_PLN * 0.55:
+            reasons.append(f"take-home up to ~{monthly:,} PLN/month (+10)")
+        elif monthly < TARGET_TAKE_HOME_PLN * Decimal("0.55"):
             points -= 15
-            reasons.append(f"pay only up to ~{monthly:,} PLN/month (-15)")
+            reasons.append(f"take-home only up to ~{monthly:,} PLN/month (-15)")
 
     if not text:
         reasons.append("no description collected: check the advert")
@@ -401,8 +468,10 @@ def load_facts(conn: psycopg.Connection) -> list[JobFacts]:
         if contract:
             job.contract_types.add(contract.lower())
         pay = monthly_pln(salary_max or salary_min, currency, period)
-        if pay is not None and (job.monthly_pln_max is None or pay > job.monthly_pln_max):
-            job.monthly_pln_max = pay
+        if pay is not None:
+            pay = take_home(pay, contract)
+            if job.take_home_max is None or pay > job.take_home_max:
+                job.take_home_max = pay
     return list(facts.values())
 
 
