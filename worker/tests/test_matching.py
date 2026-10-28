@@ -4,8 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from vacancy_finder.matching import (JobFacts, b2b_take_home, monthly_pln, required_languages,
-                                     score_job, take_home, uop_take_home)
+from vacancy_finder.matching import (JobFacts, b2b_take_home, monthly_pln, pay_points,
+                                     required_languages, score_job, take_home, uop_take_home)
 
 
 def job(title, *, description="We use Python and PostgreSQL. You will lead the team.", company="Acme",
@@ -89,7 +89,7 @@ def test_excluded_sector():
 
 
 def test_low_pay_costs_points():
-    assert "take-home only up to ~15,000 PLN/month (-15)" in score_job(
+    assert "take-home up to ~15,000 PLN/month (-12)" in score_job(
         job("Staff Engineer", pay=Decimal(15000))).reasons
 
 
@@ -247,3 +247,11 @@ def test_satellite_needs_a_space_word_nearby():
 def test_b2b_itself_earns_no_points():
     assert (score_job(job("Staff Python Engineer", contracts=["b2b"])).score
             == score_job(job("Staff Python Engineer", contracts=["permanent"])).score)
+
+
+@pytest.mark.parametrize("take_home, points", [
+    (20000, 0), (19700, 0), (19600, -1), (16000, -10), (14000, -15), (5000, -15),
+    (20599, 0), (20600, 1), (24000, 6), (30000, 16), (30600, 17), (39000, 26),
+])
+def test_pay_points(take_home, points):
+    assert pay_points(Decimal(take_home)) == points

@@ -217,8 +217,23 @@ def take_home(monthly: Decimal, contract: str | None) -> Decimal:
     return uop_take_home(monthly)
 
 
-# James's previous rate, full time on B2B, as take-home.
-TARGET_TAKE_HOME_PLN = b2b_take_home(Decimal(210 * 168))
+# Pay points, by monthly take-home: zero at PAY_ZERO, -1 per 400 PLN below it (at most -15),
+# +1 per 600 PLN above it up to 30,000, then +1 per 900 PLN, uncapped. Only whole points count.
+PAY_ZERO = 20_000
+PAY_MALUS_STEP = 400
+PAY_MALUS_FLOOR = -15
+PAY_BONUS_STEP = 600
+PAY_BONUS_KNEE = 30_000
+PAY_BONUS_STEP_HIGH = 900
+
+
+def pay_points(take_home_pln: Decimal) -> int:
+    monthly = Decimal(take_home_pln)
+    if monthly < PAY_ZERO:
+        return max(-int((PAY_ZERO - monthly) // PAY_MALUS_STEP), PAY_MALUS_FLOOR)
+    bonus = ((min(monthly, Decimal(PAY_BONUS_KNEE)) - PAY_ZERO) / PAY_BONUS_STEP
+             + max(monthly - PAY_BONUS_KNEE, Decimal(0)) / PAY_BONUS_STEP_HIGH)
+    return int(bonus)
 
 
 @dataclass
@@ -387,13 +402,9 @@ def score_job(job: JobFacts) -> Score:
 
     # Pay.
     if job.take_home_max is not None:
-        monthly = int(job.take_home_max)
-        if monthly >= TARGET_TAKE_HOME_PLN * Decimal("0.85"):
-            points += 10
-            reasons.append(f"take-home up to ~{monthly:,} PLN/month (+10)")
-        elif monthly < TARGET_TAKE_HOME_PLN * Decimal("0.55"):
-            points -= 15
-            reasons.append(f"take-home only up to ~{monthly:,} PLN/month (-15)")
+        pay = pay_points(job.take_home_max)
+        points += pay
+        reasons.append(f"take-home up to ~{int(job.take_home_max):,} PLN/month ({pay:+d})")
 
     if not text:
         reasons.append("no description collected: check the advert")
