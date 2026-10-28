@@ -7,6 +7,7 @@ from datetime import datetime
 import psycopg
 from psycopg.types.json import Jsonb
 
+from .deadlines import find_deadline
 from .models import RawPosting
 from .normalize import (
     UNKNOWN_COMPANY,
@@ -93,6 +94,11 @@ def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting
         fields["language"] = detect_language(posting.description) or detect_title_language(
             posting.title
         )
+    if fields["closes_kind"] != "deadline" and (
+            deadline := find_deadline(posting.description, posting.posted_at)):
+        fields["closes_at"], fields["closes_kind"] = deadline, "deadline"
+    elif fields["closes_at"] is None:
+        fields["closes_kind"] = None
     for unstored in ("ats_kind", "ats_slug", "unique_job"):
         fields.pop(unstored)
     fields["raw"] = Jsonb(fields["raw"])
@@ -101,12 +107,12 @@ def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting
         INSERT INTO postings (
             source_id, job_id, external_id, url, title, company_name, location_text,
             work_mode, description, language, contract_type, salary_min, salary_max,
-            salary_currency, salary_period, posted_at, raw
+            salary_currency, salary_period, posted_at, closes_at, closes_kind, raw
         ) VALUES (
             %(source_id)s, %(job_id)s, %(external_id)s, %(url)s, %(title)s, %(company_name)s,
             %(location_text)s, %(work_mode)s, %(description)s, %(language)s,
             %(contract_type)s, %(salary_min)s, %(salary_max)s, %(salary_currency)s,
-            %(salary_period)s, %(posted_at)s, %(raw)s
+            %(salary_period)s, %(posted_at)s, %(closes_at)s, %(closes_kind)s, %(raw)s
         )
         ON CONFLICT (source_id, external_id) DO UPDATE SET
             job_id = EXCLUDED.job_id,
@@ -121,6 +127,8 @@ def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting
             salary_max = EXCLUDED.salary_max,
             salary_currency = EXCLUDED.salary_currency,
             salary_period = EXCLUDED.salary_period,
+            closes_at = EXCLUDED.closes_at,
+            closes_kind = EXCLUDED.closes_kind,
             raw = EXCLUDED.raw,
             last_seen_at = now(),
             closed_at = NULL
@@ -170,3 +178,24 @@ def close_unseen(
         """
     )
     return closed
+
+
+def fill_deadlines(conn: psycopg.Connection) -> int:
+    """Read deadlines from the text of open postings stored before deadlines were read, or
+    before the wording rules in deadlines.py changed. Postings are re-read when fetched again,
+    but Just Join IT only re-fetches adverts that changed, so the worker runs this on start."""
+    rows = conn.execute(
+        """
+        SELECT id, description, posted_at FROM postings
+        WHERE closed_at IS NULL AND description IS NOT NULL
+          AND closes_kind IS DISTINCT FROM 'deadline'
+        """
+    ).fetchall()
+    found = [(deadline, posting_id) for posting_id, description, posted_at in rows
+             if (deadline := find_deadline(description, posted_at))]
+    with conn.cursor() as cur:
+        cur.executemany(
+            "UPDATE postings SET closes_at = %s, closes_kind = 'deadline' WHERE id = %s", found
+        )
+    conn.commit()
+    return len(found)

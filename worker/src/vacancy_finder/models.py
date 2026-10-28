@@ -22,6 +22,10 @@ class RawPosting:
     salary_currency: str | None = None
     salary_period: str | None = None  # hour | day | month | year
     posted_at: datetime | None = None
+    # When the advert stops taking applications, if the source says. "expiry" is the date a
+    # board takes the advert down; "deadline" is one the employer gives, usually in the text.
+    closes_at: datetime | None = None
+    closes_kind: str | None = None  # deadline | expiry
     raw: dict[str, Any] = field(default_factory=dict)
     # Set by ATS collectors so the company row records where its feed lives.
     ats_kind: str | None = None

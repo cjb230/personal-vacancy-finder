@@ -13,6 +13,7 @@ from .migrate import apply_migrations
 from .renormalize import renormalize
 from .runner import run_all
 from .seeds import load_companies
+from .store import fill_deadlines
 from .web import serve
 
 log = logging.getLogger("vacancy_finder")
@@ -28,6 +29,7 @@ def main() -> None:
         applied = apply_migrations(conn, settings.migrations_dir)
         log.info("Database ready (%d new migrations)", len(applied))
         renormalize(conn)  # in case the company/job matching rules changed
+        fill_deadlines(conn)  # in case the deadline wording rules changed
         score_all(conn)  # in case the scoring rules changed
     serve()
 
