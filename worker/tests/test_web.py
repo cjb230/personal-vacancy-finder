@@ -73,3 +73,35 @@ def test_feedback_keeps_a_snapshot_of_the_ad(conn, monkeypatch):  # noqa: F811
     feedback_id = conn.execute("SELECT id FROM job_feedback WHERE kind = 'score_lower'").fetchone()[0]
     web.delete_feedback(feedback_id)
     assert count(conn, "SELECT count(*) FROM job_feedback") == 2
+
+
+def test_filters_by_first_seen_and_score(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    source = ensure_source(conn, "test", "Test board", "board")
+    for n, title in (("1", "Engineering Manager"), ("2", "Staff Python Engineer")):
+        upsert_posting(conn, source, RawPosting(
+            external_id=n, url=f"https://x.example/{n}", title=title, company_name="Orbit",
+            location_text="Remote, Europe", work_mode="remote",
+            description="Python and PostgreSQL for satellite imagery. You will lead the team."))
+    conn.execute("UPDATE jobs SET first_seen_at = '2026-01-10 09:30+00' WHERE title LIKE 'Staff%'")
+    conn.commit()
+    score_all(conn)
+    old_score = conn.execute(
+        "SELECT score FROM job_scores s JOIN jobs j ON j.id = s.job_id WHERE j.title LIKE 'Staff%'"
+    ).fetchone()[0]
+
+    everything = web.render("match", "", 0)
+    assert "Engineering Manager" in everything and "Staff Python Engineer" in everything
+    assert "first seen 10 Jan 10:30" in everything  # shown in Warsaw time
+
+    recent = web.render("match", "", 0, seen="24")
+    assert "Engineering Manager" in recent and "Staff Python Engineer" not in recent
+    assert "Matches (1)" in recent and "seen=24" in recent  # tabs keep the filter
+    since = web.render("match", "", 0, since="2026-01-10T10:00")  # Warsaw, so 09:00 UTC
+    assert "Staff Python Engineer" in since
+    assert "Staff Python Engineer" not in web.render("match", "", 0, since="2026-01-10T11:00")
+
+    assert "Staff Python Engineer" not in web.render("match", "", 0, min_score=str(old_score + 100))
+    newest = web.render("match", "", 0, sort="new")
+    assert newest.index("Engineering Manager") < newest.index("Staff Python Engineer")
+    assert "Matches (2)" in web.render("match", "", 0, seen="bogus", since="nope", min_score="x")

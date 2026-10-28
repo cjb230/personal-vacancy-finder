@@ -1,6 +1,8 @@
 """A small results page: open jobs ranked by how well they match, with buttons to mark each
 one interested, not interested or applied, and feedback notes (reject for, rate higher or
-lower for, score higher or lower) kept with a snapshot of the ad for tuning later. Served by the worker on WEB_PORT (8080), which
+lower for, score higher or lower) kept with a snapshot of the ad for tuning later. Filters
+narrow every tab to jobs first seen recently (or since a given time) and above a minimum score,
+sorted by score or newest first. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -12,6 +14,7 @@ import os
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import psycopg
@@ -41,9 +44,22 @@ VIEWS = {
     "no": ("Filtered out", "s.verdict = 'no' AND r.decision IS NULL"),
 }
 
+# First-seen filter presets, in hours.
+SEEN_WITHIN = {"": "Any time", "6": "Last 6 hours", "24": "Last 24 hours", "72": "Last 3 days",
+               "168": "Last 7 days", "720": "Last 30 days"}
+SORTS = {"score": ("Best score", "s.score DESC, j.first_seen_at DESC"),
+         "new": ("Newest first", "j.first_seen_at DESC, s.score DESC")}
+# Times are shown, and "since" is read, in this zone (Postgres has the zone data).
+DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "Europe/Warsaw")
+FILTERS = """
+  AND (%(hours)s::int IS NULL OR j.first_seen_at >= now() - make_interval(hours => %(hours)s::int))
+  AND (%(since)s::timestamp IS NULL OR j.first_seen_at >= %(since)s::timestamp AT TIME ZONE %(tz)s)
+  AND (%(min_score)s::int IS NULL OR s.score >= %(min_score)s::int)
+"""
+
 QUERY = """
 SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.decision,
-       j.first_seen_at,
+       j.first_seen_at AT TIME ZONE %(tz)s,
        (SELECT p.url FROM postings p WHERE p.job_id = j.id AND p.closed_at IS NULL
         ORDER BY p.last_seen_at DESC LIMIT 1) AS url,
        (SELECT string_agg(DISTINCT p.location_text, ' | ') FROM postings p
@@ -54,16 +70,17 @@ FROM jobs j
 JOIN job_scores s ON s.job_id = j.id
 LEFT JOIN job_reviews r ON r.job_id = j.id
 LEFT JOIN companies c ON c.id = j.company_id
-WHERE j.status = 'open' AND {where}
+WHERE j.status = 'open' AND {where} {filters}
   AND (%(q)s = '' OR j.title ILIKE %(like)s OR c.name ILIKE %(like)s)
-ORDER BY s.score DESC, j.first_seen_at DESC
+ORDER BY {order}
 LIMIT %(limit)s OFFSET %(offset)s
 """
 
 COUNTS = """
 SELECT {cases} FROM jobs j JOIN job_scores s ON s.job_id = j.id
-LEFT JOIN job_reviews r ON r.job_id = j.id WHERE j.status = 'open'
-""".format(cases=", ".join(f"count(*) FILTER (WHERE {where})" for _, where in VIEWS.values()))
+LEFT JOIN job_reviews r ON r.job_id = j.id WHERE j.status = 'open' {filters}
+""".format(cases=", ".join(f"count(*) FILTER (WHERE {where})" for _, where in VIEWS.values()),
+           filters=FILTERS)
 
 STYLE = """
 :root { --bg:#fff; --fg:#1d1d1f; --muted:#6e6e73; --line:#e5e5ea; --accent:#0a66c2;
@@ -81,6 +98,12 @@ nav a { display:inline-block; margin:0 6px 8px 0; padding:4px 10px; border-radiu
 nav a.on { background:var(--accent); color:#fff; }
 form.search { display:inline; } form.search input { padding:4px 8px; border:1px solid var(--line);
   border-radius:6px; background:var(--bg); color:var(--fg); }
+form.filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 8px;
+  font-size:14px; color:var(--muted); }
+form.filters select, form.filters input, form.filters button { font:inherit; padding:3px 6px;
+  border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+form.filters input[type=number] { width:64px; }
+form.filters a { color:var(--accent); text-decoration:none; }
 main { padding:8px 20px 40px; max-width:1100px; }
 .job { padding:12px 0; border-bottom:1px solid var(--line); }
 .top { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
@@ -119,13 +142,31 @@ def esc(value) -> str:
     return html.escape("" if value is None else str(value))
 
 
-def render(view: str, q: str, page: int) -> str:
+def render(view: str, q: str, page: int, seen: str = "", since: str = "",
+           min_score: str = "", sort: str = "score") -> str:
+    """seen is a SEEN_WITHIN key, since a "YYYY-MM-DDTHH:MM" local time, min_score a whole
+    number; anything not in that form is ignored."""
     title, where = VIEWS[view]
+    seen = seen if seen in SEEN_WITHIN else ""
+    sort = sort if sort in SORTS else "score"
+    try:
+        since_at = datetime.fromisoformat(since) if since else None
+    except ValueError:
+        since_at, since = None, ""
+    try:
+        min_value = int(min_score) if min_score else None
+    except ValueError:
+        min_value, min_score = None, ""
+    filters = {"hours": int(seen) if seen else None, "since": since_at, "min_score": min_value,
+               "tz": DISPLAY_TZ}
+    # Carried on every link and form so the filters stay put across tabs, pages and buttons.
+    keep = {k: v for k, v in {"seen": seen, "since": since, "min_score": min_score,
+                              "sort": "" if sort == "score" else sort}.items() if v}
     with connect() as conn:
-        counts = conn.execute(COUNTS).fetchone()
+        counts = conn.execute(COUNTS, filters).fetchone()
         rows = conn.execute(
-            QUERY.format(where=where),
-            {"q": q, "like": f"%{q}%", "limit": PAGE_SIZE, "offset": page * PAGE_SIZE},
+            QUERY.format(where=where, filters=FILTERS, order=SORTS[sort][1]),
+            {"q": q, "like": f"%{q}%", "limit": PAGE_SIZE, "offset": page * PAGE_SIZE, **filters},
         ).fetchall()
         notes: dict[int, list[tuple]] = {}
         for job_id, feedback_id, kind, note in conn.execute(
@@ -135,7 +176,7 @@ def render(view: str, q: str, page: int) -> str:
             notes.setdefault(job_id, []).append((feedback_id, kind, note))
 
     tabs = "".join(
-        f'<a class="{"on" if key == view else ""}" href="/?{urlencode({"view": key, "q": q})}">'
+        f'<a class="{"on" if key == view else ""}" href="/?{urlencode({"view": key, "q": q, **keep})}">'
         f"{esc(label)} ({count})</a>"
         for (key, (label, _)), count in zip(VIEWS.items(), counts)
     )
@@ -149,14 +190,14 @@ def render(view: str, q: str, page: int) -> str:
         )
         clear = '<button name="decision" value="">Clear</button>' if decision else ""
         chips = "".join(f"<span>{esc(r)}</span>" for r in reasons)
-        back = esc(f"/?{urlencode({'view': view, 'q': q, 'page': page})}#job-{job_id}")
+        back = esc(f"/?{urlencode({'view': view, 'q': q, 'page': page, **keep})}#job-{job_id}")
         jobs.append(f"""
 <div class="job {esc(verdict)}" id="job-{job_id}">
   <div class="top"><span class="score">{score}</span>
     <span class="title"><a href="{esc(url)}" target="_blank" rel="noopener">{esc(job_title)}</a></span>
     <span>{esc(company)}</span></div>
   <div class="meta">{esc(locations or "location not given")} · {esc(sources)} ·
-    first seen {first_seen:%d %b}</div>
+    first seen {first_seen:%d %b %H:%M}</div>
   <div class="reasons">{chips}</div>
   <form class="actions" method="post" action="/review">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -166,7 +207,7 @@ def render(view: str, q: str, page: int) -> str:
 </div>""")
     pager = ""
     if len(rows) == PAGE_SIZE:
-        pager = (f'<div class="pager"><a href="/?{urlencode({"view": view, "q": q, "page": page + 1})}">'
+        pager = (f'<div class="pager"><a href="/?{urlencode({"view": view, "q": q, "page": page + 1, **keep})}">'
                  "Next page</a></div>")
     body = "".join(jobs) or '<div class="empty">Nothing here yet.</div>'
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -174,8 +215,27 @@ def render(view: str, q: str, page: int) -> str:
 <title>Vacancy finder</title><style>{STYLE}</style></head><body>
 <header><h1>Vacancy finder</h1><nav>{tabs}
 <form class="search" method="get"><input type="hidden" name="view" value="{esc(view)}">
-<input name="q" value="{esc(q)}" placeholder="Search title or company"></form></nav></header>
+{hidden(keep)}<input name="q" value="{esc(q)}" placeholder="Search title or company"></form></nav>
+{render_filters(view, q, seen, since, min_score, sort)}</header>
 <main><h2 style="font-size:16px">{esc(title)}</h2>{body}{pager}</main></body></html>"""
+
+
+def hidden(fields: dict) -> str:
+    return "".join(f'<input type="hidden" name="{esc(k)}" value="{esc(v)}">' for k, v in fields.items())
+
+
+def render_filters(view: str, q: str, seen: str, since: str, min_score: str, sort: str) -> str:
+    def options(choices: dict, chosen: str) -> str:
+        return "".join(f'<option value="{esc(k)}"{" selected" if k == chosen else ""}>{esc(label)}</option>'
+                       for k, label in choices.items())
+    clear = (f' <a href="/?{urlencode({"view": view, "q": q})}">Clear filters</a>'
+             if seen or since or min_score or sort != "score" else "")
+    return f"""<form class="filters" method="get">{hidden({"view": view, "q": q})}
+<label>First seen <select name="seen">{options(SEEN_WITHIN, seen)}</select></label>
+<label>or since <input type="datetime-local" name="since" value="{esc(since)}"></label>
+<label>Min score <input type="number" name="min_score" value="{esc(min_score)}"></label>
+<label>Sort <select name="sort">{options({k: label for k, (label, _) in SORTS.items()}, sort)}</select></label>
+<button>Apply</button>{clear}</form>"""
 
 
 def render_notes(job_id: int, notes: list[tuple], back: str) -> str:
@@ -281,7 +341,8 @@ class Handler(BaseHTTPRequestHandler):
             page = max(0, int(params.get("page", ["0"])[0]))
         except ValueError:
             page = 0
-        self._send(HTTPStatus.OK, render(view, q, page))
+        filters = {k: params.get(k, [""])[0].strip()[:20] for k in ("seen", "since", "min_score", "sort")}
+        self._send(HTTPStatus.OK, render(view, q, page, **filters))
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
