@@ -4,7 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from vacancy_finder.matching import JobFacts, monthly_pln, required_languages, score_job
+from vacancy_finder.matching import (JobFacts, b2b_take_home, monthly_pln, required_languages,
+                                     score_job, take_home, uop_take_home)
 
 
 def job(title, *, description="We use Python and PostgreSQL. You will lead the team.", company="Acme",
@@ -17,7 +18,7 @@ def job(title, *, description="We use Python and PostgreSQL. You will lead the t
     facts.languages = set(languages)
     facts.required_languages = set(required)
     facts.contract_types = set(contracts)
-    facts.monthly_pln_max = pay
+    facts.take_home_max = pay
     return facts
 
 
@@ -88,7 +89,7 @@ def test_excluded_sector():
 
 
 def test_low_pay_costs_points():
-    assert "pay only up to ~15,000 PLN/month (-15)" in score_job(
+    assert "take-home only up to ~15,000 PLN/month (-15)" in score_job(
         job("Staff Engineer", pay=Decimal(15000))).reasons
 
 
@@ -182,3 +183,67 @@ def test_remote_within_another_country_and_hybrid_abroad_capped():
     berlin = score_job(job("Engineering Manager, Platform", modes=("hybrid",),
                            locations=("Berlin, Germany",), sectors=["space"], pay=Decimal(40000)))
     assert berlin.verdict == "maybe"
+
+
+def test_take_home_pay():
+    assert b2b_take_home(Decimal(35280)) == Decimal("29040.70")
+    # A permanent contract at 10,000 gross is about 7,150 a month in hand.
+    assert round(uop_take_home(Decimal(10000))) == 7147
+    # Pay is UoP unless the posting says B2B or contractor.
+    assert take_home(Decimal(31000), "permanent") == take_home(Decimal(31000), None)
+    assert take_home(Decimal(31000), "b2b;permanent") == b2b_take_home(Decimal(31000))
+    assert take_home(Decimal(31000), "Contractor") == b2b_take_home(Decimal(31000))
+    assert take_home(Decimal(31000), None) < b2b_take_home(Decimal(31000))
+
+
+@pytest.mark.parametrize("title", [
+    "Java Expert/ Tech Lead", "Lead Software Engineer (Golang/TypeScript)",
+    "Mobile Staff Engineer, Platform/Infrastructure", "Technical Lead (C++, Linux)",
+    "Veeva Vault Tech Lead", "Avaloq Engineering Lead",
+])
+def test_another_stack_in_the_title_costs_points(title):
+    assert "title names another stack or platform (-15)" in score_job(job(title)).reasons
+
+
+def test_python_in_the_title_is_not_another_stack():
+    reasons = score_job(job("Staff Full Stack Engineer (Python/React)")).reasons
+    assert "title names another stack or platform (-15)" not in reasons
+    assert "title names another stack or platform (-15)" not in score_job(
+        job("Engineering Manager, Go-to-Market Platform")).reasons
+
+
+@pytest.mark.parametrize("title", [
+    "Senior / Principal DevOps Engineer", "Tech Lead DevOps Engineer (f/m/x)", "Staff SRE",
+])
+def test_ops_roles_cost_points(title):
+    assert "DevOps / SRE / sysadmin role (-15)" in score_job(job(title)).reasons
+
+
+def test_region_from_headline_when_no_location():
+    result = score_job(job("Senior/Staff Backend Engineer, Backend Platform", locations=(),
+                           sectors=["space"], description=(
+                               "Remote (US) Close ( https://close.com ) | Senior/Staff Backend "
+                               "Engineer | Full-time\nWe use Python and PostgreSQL.")))
+    assert result.verdict == "maybe"
+    assert "remote, listed for US (+5)" in result.reasons
+    # "Join us" in a headline isn't a region.
+    assert not any("listed for" in r for r in score_job(job(
+        "Staff Python Engineer", locations=(), description="Remote. Join us!\nPython.")).reasons)
+
+
+def test_remote_in_warsaw_counts_as_poland():
+    assert "remote, Europe/Poland OK (+15)" in score_job(job(
+        "Technical Lead", locations=("Warsaw",))).reasons
+
+
+def test_satellite_needs_a_space_word_nearby():
+    bank = "Python. Ensure satellite interfaces are built optimally."
+    assert not any("space" in r for r in score_job(job("Staff Software Engineer",
+                                                       description=bank)).reasons)
+    assert "space / satellite / GIS work (+15)" in score_job(job(
+        "Staff Software Engineer", description="Python software for satellites in orbit.")).reasons
+
+
+def test_b2b_itself_earns_no_points():
+    assert (score_job(job("Staff Python Engineer", contracts=["b2b"])).score
+            == score_job(job("Staff Python Engineer", contracts=["permanent"])).score)
