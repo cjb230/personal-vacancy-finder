@@ -7,8 +7,8 @@ The criteria (see the project notes, 2026-10-26):
 - Sectors: space (incl. Earth observation, GIS) first; energy, green tech, health, edtech,
   robotics next. Never tobacco or gambling / free-to-play games.
 - English adverts only, and no requirement to speak Polish or another language.
-- Prefers B2B; previous rate 210 PLN/hour. Pay is compared as take-home: a salary is assumed
-  to be a permanent contract (umowa o pracę) unless the posting says B2B.
+- Previous rate 210 PLN/hour on B2B. Pay is compared as take-home, so B2B and UoP are judged
+  alike: a salary is assumed to be a permanent contract (umowa o pracę) unless it says B2B.
 
 Each rule adds or subtracts points and explains itself in `reasons`. A hard "no" (wrong
 language, non-engineering role, location ruled out, excluded sector) makes the verdict
@@ -385,10 +385,7 @@ def score_job(job: JobFacts) -> Score:
         points += 6
         reasons.append("energy / climate / health / education / robotics (+6)")
 
-    # Contract and pay.
-    if any("b2b" in c for c in job.contract_types):
-        points += 5
-        reasons.append("B2B possible (+5)")
+    # Pay.
     if job.take_home_max is not None:
         monthly = int(job.take_home_max)
         if monthly >= TARGET_TAKE_HOME_PLN * Decimal("0.85"):

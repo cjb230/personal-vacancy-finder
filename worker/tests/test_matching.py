@@ -242,3 +242,8 @@ def test_satellite_needs_a_space_word_nearby():
                                                        description=bank)).reasons)
     assert "space / satellite / GIS work (+15)" in score_job(job(
         "Staff Software Engineer", description="Python software for satellites in orbit.")).reasons
+
+
+def test_b2b_itself_earns_no_points():
+    assert (score_job(job("Staff Python Engineer", contracts=["b2b"])).score
+            == score_job(job("Staff Python Engineer", contracts=["permanent"])).score)
