@@ -9,7 +9,7 @@ dependencies = [
     "tzdata",  # time zone data for zoneinfo, in case the image lacks it
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = ["pytest>=8"]
 
 [build-system]
