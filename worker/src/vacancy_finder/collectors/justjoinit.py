@@ -179,6 +179,9 @@ def parse_offer_page(page: str, entry: SitemapEntry) -> RawPosting | None:
         salary_currency=salary.get("currency"),
         salary_period=salary.get("unit") if salary.get("unit") in ("hour", "day", "month", "year") else None,
         posted_at=from_iso(offer.get("publishedAt") or posting.get("datePosted")),
+        # About 30 days after publishing, unless the employer renews the advert.
+        closes_at=from_iso(posting.get("validThrough")),
+        closes_kind="expiry" if posting.get("validThrough") else None,
         raw={
             "sitemap_lastmod": entry.lastmod,
             "offer": offer,

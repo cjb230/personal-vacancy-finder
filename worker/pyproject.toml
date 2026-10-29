@@ -6,6 +6,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "httpx>=0.27",
     "beautifulsoup4>=4.12",
+    "tzdata",  # time zone data for zoneinfo, in case the image lacks it
 ]
 
 [project.optional-dependencies]

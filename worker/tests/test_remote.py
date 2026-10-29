@@ -114,6 +114,12 @@ def test_himalayas_parse():
     assert "description" not in p.raw
 
 
+def test_himalayas_expiry():
+    assert HimalayasCollector().parse(HIMALAYAS_JOB).closes_at is None
+    p = HimalayasCollector().parse(dict(HIMALAYAS_JOB, expiryDate=1798280989))
+    assert (p.closes_at, p.closes_kind) == (datetime.fromtimestamp(1798280989, UTC), "expiry")
+
+
 def test_himalayas_salary_fields_only_with_amounts():
     p = HimalayasCollector().parse(dict(HIMALAYAS_JOB, minSalary=None, maxSalary=None))
     assert (p.salary_min, p.salary_currency, p.salary_period) == (None, None, None)

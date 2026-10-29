@@ -105,3 +105,39 @@ def test_filters_by_first_seen_and_score(conn, monkeypatch):  # noqa: F811
     newest = web.render("match", "", 0, sort="new")
     assert newest.index("Engineering Manager") < newest.index("Staff Python Engineer")
     assert "Matches (2)" in web.render("match", "", 0, seen="bogus", since="nope", min_score="x")
+
+
+def test_closing_filter_and_sort(conn, monkeypatch):  # noqa: F811
+    from datetime import UTC, datetime, timedelta
+
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    source = ensure_source(conn, "test", "Test board", "board")
+    now = datetime.now(UTC)
+    for n, title, closes, kind in (
+            ("1", "Engineering Manager", now + timedelta(hours=30), "deadline"),
+            ("2", "Staff Python Engineer", now + timedelta(days=5), "expiry"),
+            ("3", "Python Engineering Lead", now - timedelta(days=1), "deadline"),
+            ("4", "Head of Engineering", None, None)):
+        upsert_posting(conn, source, RawPosting(
+            external_id=n, url=f"https://x.example/{n}", title=title, company_name=f"Orbit {n}",
+            location_text="Remote, Europe", work_mode="remote", closes_at=closes, closes_kind=kind,
+            description="Python and PostgreSQL for satellite imagery. You will lead the team."))
+    conn.commit()
+    score_all(conn)
+
+    everything = web.render("match", "", 0)
+    assert '<span class="soon">apply by' in everything
+    assert "ad ends" in everything and "deadline passed" in everything
+
+    soon = web.render("match", "", 0, closes="2")
+    assert "Engineering Manager" in soon and "Matches (1)" in soon and "closes=2" in soon
+    assert "Staff Python Engineer" not in soon and "Python Engineering Lead" not in soon
+    week = web.render("match", "", 0, closes="7")
+    assert "Matches (2)" in week and "Head of Engineering" not in week
+    assert "Matches (1)" in web.render("match", "", 0, closes="deadline")
+    assert "Matches (4)" in web.render("match", "", 0, closes="bogus")
+
+    by_closing = web.render("match", "", 0, sort="closing")
+    order = [by_closing.index(t) for t in ("Engineering Manager", "Staff Python Engineer",
+                                           "Head of Engineering")]
+    assert order == sorted(order)

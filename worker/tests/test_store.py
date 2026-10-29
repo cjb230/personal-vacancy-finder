@@ -117,3 +117,57 @@ def test_latest_n_feeds_close_only_after_stale_window(conn):
     conn.commit()
     run_collector(conn, LatestOnly("feed", []))
     assert count(conn, "SELECT count(*) FROM postings WHERE closed_at IS NULL") == 0
+
+
+def test_closing_dates_from_source_and_text(conn):
+    from datetime import UTC, datetime
+
+    from vacancy_finder.store import ensure_source, fill_deadlines, upsert_posting
+
+    source = ensure_source(conn, "test", "Test board", "board")
+    expiry = datetime(2026, 11, 26, 23, 0, tzinfo=UTC)
+    upsert_posting(conn, source, RawPosting(
+        external_id="1", url="https://x/1", title="A", company_name="Acme",
+        description="Apply by 10 November 2026.", posted_at=datetime(2026, 10, 20, tzinfo=UTC),
+        closes_at=expiry, closes_kind="expiry"))
+    upsert_posting(conn, source, RawPosting(
+        external_id="2", url="https://x/2", title="B", company_name="Acme",
+        closes_at=expiry, closes_kind="expiry"))
+    upsert_posting(conn, source, RawPosting(external_id="3", url="https://x/3", title="C",
+                                            company_name="Acme", description="No dates."))
+    rows = dict((r[0], r[1:]) for r in conn.execute(
+        "SELECT external_id, closes_kind, closes_at FROM postings ORDER BY external_id"))
+    # The employer's stated deadline wins over the board's expiry.
+    assert rows["1"] == ("deadline", datetime(2026, 11, 10, 22, 59, 59, tzinfo=UTC))
+    assert rows["2"] == ("expiry", expiry)
+    assert rows["3"] == (None, None)
+
+    # Postings stored before deadlines were read get them on the next start.
+    conn.execute("UPDATE postings SET description = 'Closing date: 2026-11-12', closes_kind = NULL,"
+                 " closes_at = NULL WHERE external_id = '3'")
+    assert fill_deadlines(conn) == 1
+    assert conn.execute("SELECT closes_kind FROM postings WHERE external_id = '3'").fetchone() == (
+        "deadline",)
+
+
+def test_job_closing_view(conn):
+    from vacancy_finder.store import ensure_source, upsert_posting
+
+    a = ensure_source(conn, "a", "A", "board")
+    b = ensure_source(conn, "b", "B", "board")
+
+    def post(source, ext, title, closes_at=None, kind=None):
+        upsert_posting(conn, source, RawPosting(external_id=ext, url=f"https://x/{ext}", title=title,
+                                                company_name="Acme", closes_at=closes_at,
+                                                closes_kind=kind))
+    post(a, "1", "Both expire", "2026-11-01T00:00Z", "expiry")
+    post(b, "2", "Both expire", "2026-11-05T00:00Z", "expiry")
+    post(a, "3", "One never expires", "2026-11-01T00:00Z", "expiry")
+    post(b, "4", "One never expires")
+    post(a, "5", "Deadline", "2026-11-20T00:00Z", "expiry")
+    post(b, "6", "Deadline", "2026-11-03T00:00Z", "deadline")
+    rows = dict((title, (str(closes.date()) if closes else None, stated)) for title, closes, stated in conn.execute(
+        "SELECT j.title, c.closes_at AT TIME ZONE 'UTC', c.is_deadline FROM jobs j "
+        "JOIN job_closing c ON c.job_id = j.id"))
+    assert rows == {"Both expire": ("2026-11-05", False), "One never expires": (None, False),
+                    "Deadline": ("2026-11-03", True)}

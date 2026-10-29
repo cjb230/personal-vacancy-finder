@@ -11,8 +11,10 @@ What goes in ats_slug differs by system, because their feed addresses do:
 
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -204,10 +206,18 @@ class TraffitCollector(AtsCollector):
                 language=advert.get("language"),
                 contract_type=options.get("job_type"),
                 posted_at=from_iso((post.get("valid_start") or "").replace(" ", "T") or None),
-                raw={"options": options, "nr_ref": (advert.get("recruitment") or {}).get("nr_ref")},
+                closes_at=_warsaw(from_iso((post.get("valid_end") or "").replace(" ", "T") or None)),
+                closes_kind="expiry" if post.get("valid_end") else None,
+                raw={"options": options, "nr_ref": (advert.get("recruitment") or {}).get("nr_ref"),
+                     "valid_end": post.get("valid_end")},
                 ats_kind=self.source_key,
                 ats_slug=company.slug,
             )
+
+
+def _warsaw(value: datetime | None) -> datetime | None:
+    """Traffit gives Polish local times without a zone."""
+    return value.replace(tzinfo=ZoneInfo("Europe/Warsaw")) if value and not value.tzinfo else value
 
 
 MORE_ATS_COLLECTORS = [

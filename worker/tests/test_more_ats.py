@@ -94,9 +94,19 @@ def test_traffit():
     assert first.language == "en"
     assert first.contract_type == "B2B"
     assert first.posted_at == datetime(2026, 10, 3, 10, 20)
+    assert first.closes_at is None
     assert second.language == "pl"
     assert second.work_mode == "unknown"
     assert second.description is None
+
+
+def test_traffit_valid_end_is_warsaw_time():
+    payload = json.loads((FIXTURES / "traffit.json").read_text())
+    for post in payload:
+        post["valid_end"] = "2026-11-02 23:59:00"
+    first, _ = TraffitCollector().parse(payload, company("acme"))
+    assert first.closes_at == datetime(2026, 11, 2, 22, 59, tzinfo=UTC)
+    assert first.closes_kind == "expiry"
 
 
 def parse_page(fixture, slug, pattern):

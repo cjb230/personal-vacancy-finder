@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -57,6 +58,8 @@ def test_parse_offer_page():
     assert p.language == "en"
     assert p.description.startswith("About Shelf")
     assert p.raw["sitemap_lastmod"] == "2026-10-25"
+    assert p.closes_at == datetime(2026, 11, 26, 22, 59, 59, 999999, tzinfo=UTC)
+    assert p.closes_kind == "expiry"
 
 
 def test_keywords_match_whole_words_only():

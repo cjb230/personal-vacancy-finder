@@ -143,6 +143,8 @@ class HimalayasCollector(FeedCollector):
             salary_currency=job.get("currency") if paid else None,
             salary_period=self._PERIODS.get((job.get("salaryPeriod") or "").lower()) if paid else None,
             posted_at=from_epoch(job.get("pubDate")),
+            closes_at=from_epoch(job.get("expiryDate")),
+            closes_kind="expiry" if job.get("expiryDate") else None,
             raw={k: v for k, v in job.items() if k != "description"},
         )
 

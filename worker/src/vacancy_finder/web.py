@@ -1,8 +1,8 @@
 """A small results page: open jobs ranked by how well they match, with buttons to mark each
 one interested, not interested or applied, and feedback notes (reject for, rate higher or
 lower for, score higher or lower) kept with a snapshot of the ad for tuning later. Filters
-narrow every tab to jobs first seen recently (or since a given time) and above a minimum score,
-sorted by score or newest first. Served by the worker on WEB_PORT (8080), which
+narrow every tab to jobs first seen recently (or since a given time), above a minimum score,
+or closing soon, sorted by score, newest first or closing soonest. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -14,8 +14,9 @@ import os
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlencode, urlparse
+from zoneinfo import ZoneInfo
 
 import psycopg
 
@@ -47,19 +48,29 @@ VIEWS = {
 # First-seen filter presets, in hours.
 SEEN_WITHIN = {"": "Any time", "6": "Last 6 hours", "24": "Last 24 hours", "72": "Last 3 days",
                "168": "Last 7 days", "720": "Last 30 days"}
+# Closing-date filter presets: within N days (an employer deadline or the advert's expiry),
+# or "deadline" for any job whose advert states a deadline still to come.
+CLOSES = {"": "Any time", "2": "Within 2 days", "7": "Within 7 days",
+          "deadline": "Has a stated deadline"}
 SORTS = {"score": ("Best score", "s.score DESC, j.first_seen_at DESC"),
-         "new": ("Newest first", "j.first_seen_at DESC, s.score DESC")}
+         "new": ("Newest first", "j.first_seen_at DESC, s.score DESC"),
+         "closing": ("Closing soonest", "CASE WHEN jc.closes_at >= now() THEN jc.closes_at END "
+                                        "NULLS LAST, s.score DESC")}
 # Times are shown, and "since" is read, in this zone (Postgres has the zone data).
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "Europe/Warsaw")
 FILTERS = """
   AND (%(hours)s::int IS NULL OR j.first_seen_at >= now() - make_interval(hours => %(hours)s::int))
   AND (%(since)s::timestamp IS NULL OR j.first_seen_at >= %(since)s::timestamp AT TIME ZONE %(tz)s)
   AND (%(min_score)s::int IS NULL OR s.score >= %(min_score)s::int)
+  AND (%(closes_days)s::int IS NULL OR (jc.closes_at >= now()
+       AND jc.closes_at < now() + make_interval(days => %(closes_days)s::int)))
+  AND (NOT %(deadline_only)s OR (jc.is_deadline AND jc.closes_at >= now()))
 """
 
 QUERY = """
 SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.decision,
-       j.first_seen_at AT TIME ZONE %(tz)s,
+       j.first_seen_at AT TIME ZONE %(tz)s, jc.closes_at AT TIME ZONE %(tz)s, jc.is_deadline,
+       jc.closes_at < now(),
        (SELECT p.url FROM postings p WHERE p.job_id = j.id AND p.closed_at IS NULL
         ORDER BY p.last_seen_at DESC LIMIT 1) AS url,
        (SELECT string_agg(DISTINCT p.location_text, ' | ') FROM postings p
@@ -70,6 +81,7 @@ FROM jobs j
 JOIN job_scores s ON s.job_id = j.id
 LEFT JOIN job_reviews r ON r.job_id = j.id
 LEFT JOIN companies c ON c.id = j.company_id
+LEFT JOIN job_closing jc ON jc.job_id = j.id
 WHERE j.status = 'open' AND {where} {filters}
   AND (%(q)s = '' OR j.title ILIKE %(like)s OR c.name ILIKE %(like)s)
 ORDER BY {order}
@@ -78,7 +90,8 @@ LIMIT %(limit)s OFFSET %(offset)s
 
 COUNTS = """
 SELECT {cases} FROM jobs j JOIN job_scores s ON s.job_id = j.id
-LEFT JOIN job_reviews r ON r.job_id = j.id WHERE j.status = 'open' {filters}
+LEFT JOIN job_reviews r ON r.job_id = j.id LEFT JOIN job_closing jc ON jc.job_id = j.id
+WHERE j.status = 'open' {filters}
 """.format(cases=", ".join(f"count(*) FILTER (WHERE {where})" for _, where in VIEWS.values()),
            filters=FILTERS)
 
@@ -111,6 +124,7 @@ main { padding:8px 20px 40px; max-width:1100px; }
 .match .score { color:var(--good); } .maybe .score { color:var(--warn); } .no .score { color:var(--bad); }
 .title a { color:var(--accent); font-weight:600; text-decoration:none; }
 .meta { color:var(--muted); font-size:13px; margin:2px 0 4px 46px; }
+.meta .soon { color:var(--bad); font-weight:600; }
 .reasons { margin:0 0 6px 46px; font-size:13px; }
 .reasons span { display:inline-block; background:var(--chip); border-radius:10px; padding:1px 8px;
                 margin:2px 4px 2px 0; }
@@ -143,11 +157,12 @@ def esc(value) -> str:
 
 
 def render(view: str, q: str, page: int, seen: str = "", since: str = "",
-           min_score: str = "", sort: str = "score") -> str:
+           min_score: str = "", sort: str = "score", closes: str = "") -> str:
     """seen is a SEEN_WITHIN key, since a "YYYY-MM-DDTHH:MM" local time, min_score a whole
-    number; anything not in that form is ignored."""
+    number, closes a CLOSES key; anything not in that form is ignored."""
     title, where = VIEWS[view]
     seen = seen if seen in SEEN_WITHIN else ""
+    closes = closes if closes in CLOSES else ""
     sort = sort if sort in SORTS else "score"
     try:
         since_at = datetime.fromisoformat(since) if since else None
@@ -158,10 +173,11 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     except ValueError:
         min_value, min_score = None, ""
     filters = {"hours": int(seen) if seen else None, "since": since_at, "min_score": min_value,
-               "tz": DISPLAY_TZ}
+               "closes_days": int(closes) if closes.isdigit() else None,
+               "deadline_only": closes == "deadline", "tz": DISPLAY_TZ}
     # Carried on every link and form so the filters stay put across tabs, pages and buttons.
     keep = {k: v for k, v in {"seen": seen, "since": since, "min_score": min_score,
-                              "sort": "" if sort == "score" else sort}.items() if v}
+                              "closes": closes, "sort": "" if sort == "score" else sort}.items() if v}
     with connect() as conn:
         counts = conn.execute(COUNTS, filters).fetchone()
         rows = conn.execute(
@@ -181,8 +197,8 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
         for (key, (label, _)), count in zip(VIEWS.items(), counts)
     )
     jobs = []
-    for (job_id, job_title, company, verdict, score, level, reasons, decision, first_seen, url,
-         locations, sources) in rows:
+    for (job_id, job_title, company, verdict, score, level, reasons, decision, first_seen,
+         closes_at, is_deadline, closed_already, url, locations, sources) in rows:
         buttons = "".join(
             f'<button name="decision" value="{key}" class="{"on" if decision == key else ""}">'
             f"{label}</button>"
@@ -197,7 +213,7 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     <span class="title"><a href="{esc(url)}" target="_blank" rel="noopener">{esc(job_title)}</a></span>
     <span>{esc(company)}</span></div>
   <div class="meta">{esc(locations or "location not given")} · {esc(sources)} ·
-    first seen {first_seen:%d %b %H:%M}</div>
+    first seen {first_seen:%d %b %H:%M}{render_closing(closes_at, is_deadline, closed_already)}</div>
   <div class="reasons">{chips}</div>
   <form class="actions" method="post" action="/review">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -216,24 +232,40 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
 <header><h1>Vacancy finder</h1><nav>{tabs}
 <form class="search" method="get"><input type="hidden" name="view" value="{esc(view)}">
 {hidden(keep)}<input name="q" value="{esc(q)}" placeholder="Search title or company"></form></nav>
-{render_filters(view, q, seen, since, min_score, sort)}</header>
+{render_filters(view, q, seen, since, min_score, sort, closes)}</header>
 <main><h2 style="font-size:16px">{esc(title)}</h2>{body}{pager}</main></body></html>"""
+
+
+def render_closing(closes_at: datetime | None, is_deadline: bool, passed: bool) -> str:
+    """" · apply by 15 Nov" for an employer deadline, " · ad ends 26 Nov" for an expiry,
+    highlighted when it is less than two days away. closes_at is a DISPLAY_TZ local time."""
+    if closes_at is None:
+        return ""
+    end_of_day = (closes_at.hour, closes_at.minute) == (23, 59)
+    when = f"{closes_at:%d %b}" if end_of_day else f"{closes_at:%d %b %H:%M}"
+    if passed:
+        return f' · <span>{"deadline passed" if is_deadline else "ad ended"} {when}</span>'
+    soon = closes_at - datetime.now(ZoneInfo(DISPLAY_TZ)).replace(tzinfo=None) < timedelta(days=2)
+    label = "apply by" if is_deadline else "ad ends"
+    return f' · <span class="{"soon" if soon else ""}">{label} {when}</span>'
 
 
 def hidden(fields: dict) -> str:
     return "".join(f'<input type="hidden" name="{esc(k)}" value="{esc(v)}">' for k, v in fields.items())
 
 
-def render_filters(view: str, q: str, seen: str, since: str, min_score: str, sort: str) -> str:
+def render_filters(view: str, q: str, seen: str, since: str, min_score: str, sort: str,
+                   closes: str = "") -> str:
     def options(choices: dict, chosen: str) -> str:
         return "".join(f'<option value="{esc(k)}"{" selected" if k == chosen else ""}>{esc(label)}</option>'
                        for k, label in choices.items())
     clear = (f' <a href="/?{urlencode({"view": view, "q": q})}">Clear filters</a>'
-             if seen or since or min_score or sort != "score" else "")
+             if seen or since or min_score or closes or sort != "score" else "")
     return f"""<form class="filters" method="get">{hidden({"view": view, "q": q})}
 <label>First seen <select name="seen">{options(SEEN_WITHIN, seen)}</select></label>
 <label>or since <input type="datetime-local" name="since" value="{esc(since)}"></label>
 <label>Min score <input type="number" name="min_score" value="{esc(min_score)}"></label>
+<label>Closing <select name="closes">{options(CLOSES, closes)}</select></label>
 <label>Sort <select name="sort">{options({k: label for k, (label, _) in SORTS.items()}, sort)}</select></label>
 <button>Apply</button>{clear}</form>"""
 
@@ -341,7 +373,7 @@ class Handler(BaseHTTPRequestHandler):
             page = max(0, int(params.get("page", ["0"])[0]))
         except ValueError:
             page = 0
-        filters = {k: params.get(k, [""])[0].strip()[:20] for k in ("seen", "since", "min_score", "sort")}
+        filters = {k: params.get(k, [""])[0].strip()[:20] for k in ("seen", "since", "min_score", "sort", "closes")}
         self._send(HTTPStatus.OK, render(view, q, page, **filters))
 
     def do_POST(self) -> None:
