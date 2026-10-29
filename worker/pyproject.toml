@@ -8,7 +8,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = ["pytest>=8"]
 
 [build-system]

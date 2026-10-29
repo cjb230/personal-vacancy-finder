@@ -40,11 +40,12 @@ Schema changes go in `worker/migrations/` as new numbered `.sql` files. The work
 
 ```sh
 cd worker
-python -m venv .venv && . .venv/bin/activate
-pip install -e '.[dev]'
-pytest                                          # unit tests only
-TEST_DATABASE_URL=postgresql://... pytest       # plus database tests
+uv sync                                                # creates .venv with the dev tools
+uv run pytest                                          # unit tests only
+TEST_DATABASE_URL=postgresql://... uv run pytest       # plus database tests
 ```
+
+Dependencies are pinned in `worker/uv.lock`, which the Docker build also installs from. After changing them in `pyproject.toml`, run `uv lock` and commit the lockfile.
 
 The database tests wipe the schema of the database they point at, so give them a disposable one, e.g. `docker compose exec db createdb -U vacancies vacancies_test`.
 
