@@ -59,9 +59,3 @@ def run_collector(conn: psycopg.Connection, collector: Collector) -> None:
         conn.commit()
         log.exception("%s failed", collector.source_key)
 
-
-def run_all(conn: psycopg.Connection, collectors: list[Collector]) -> None:
-    if not collectors:
-        log.info("No collectors registered yet")
-    for collector in collectors:
-        run_collector(conn, collector)
