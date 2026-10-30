@@ -19,6 +19,7 @@ around each link.
 
 import email
 import email.policy
+import html
 import imaplib
 import logging
 import os
@@ -202,6 +203,9 @@ class AlertParser:
     sender: re.Pattern  # matched against the From address
     link: re.Pattern  # job links; group 1 is the platform's job id
     canonical: str  # job URL from the id, without tracking parameters
+    # (title, company, location) from a job's card, for senders whose layout we know;
+    # None for any part it can't find, which then falls back to the generic guess.
+    card_fields: Callable[[JobLink], tuple[str | None, str | None, str | None]] | None = None
 
     def postings(self, msg: StoredMessage) -> Iterator[RawPosting]:
         if not msg.body_html:
@@ -209,11 +213,16 @@ class AlertParser:
         for job in find_job_links(msg.body_html, "https://example.invalid/", self.link,
                                   key=lambda href: self.link.search(href).group(1)):
             job_id = self.link.search(job.url).group(1)
-            company, location = company_and_location(job)
+            title, company, location = (
+                self.card_fields(job) if self.card_fields else (None, None, None)
+            )
+            if not (title and company):
+                company, location = company_and_location(job)
+                title = job.title
             yield RawPosting(
                 external_id=f"{self.platform}:{job_id}",
                 url=self.canonical.format(id=job_id),
-                title=job.title or "(untitled)",
+                title=title or "(untitled)",
                 company_name=company or "(unknown company)",
                 location_text=location,
                 work_mode=guess_work_mode(location),
@@ -246,10 +255,32 @@ def company_and_location(job: JobLink) -> tuple[str | None, str | None]:
     return first[0], job.location or (lines[1] if len(lines) > 1 else None)
 
 
+def _has_class(tag, word: str) -> bool:
+    return word in (tag.get("class") or [])
+
+
+def linkedin_card(job: JobLink) -> tuple[str | None, str | None, str | None]:
+    """LinkedIn job cards: the title is a bold link, and the line under it reads
+    "Company · Location (Remote)". Badges such as "Easy Apply" sit in separate labels."""
+    title_tag = job.card.find(lambda t: t.name == "a" and _has_class(t, "font-bold"))
+    line_tag = job.card.find(lambda t: t.name == "p" and _has_class(t, "text-system-gray-100"))
+    title = clean_text(title_tag.get_text(" ")) if title_tag else None
+    line = clean_text(line_tag.get_text(" ")) if line_tag else None
+    if not line:
+        return title, None, None
+    company, _, location = line.partition(" · ")
+    return title, company or None, location or None
+
+
+def clean_text(text: str) -> str | None:
+    # Some alerts escape twice ("&amp;amp;"), so a single unescape by the parser leaves "&amp;".
+    return " ".join(html.unescape(text).split()) or None
+
+
 PARSERS = [
     AlertParser("linkedin", re.compile(r"linkedin\.com$"),
                 re.compile(r"linkedin\.com/(?:comm/)?jobs/view/(\d+)"),
-                "https://www.linkedin.com/jobs/view/{id}/"),
+                "https://www.linkedin.com/jobs/view/{id}/", linkedin_card),
     # Welcome to the Jungle links are either app.welcometothejungle.com/jobs/{id} (the old Otta
     # app) or www.welcometothejungle.com/{lang}/companies/{company}/jobs/{slug}.
     AlertParser("wttj", re.compile(r"(otta\.com|welcometothejungle\.com)$"),

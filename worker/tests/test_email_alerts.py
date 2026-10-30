@@ -53,6 +53,24 @@ def test_linkedin_alert():
     assert second.work_mode == "remote"
 
 
+def test_real_linkedin_alert_layout():
+    """An anonymised, trimmed copy of a real alert (October 2026)."""
+    msg = to_stored((FIXTURES / "linkedin_job_alert_2026.eml").read_bytes(), 6)
+    first, second = parse_message(msg)
+    assert first.external_id == "linkedin:4484763155"
+    assert first.url == "https://www.linkedin.com/jobs/view/4484763155/"
+    assert (first.title, first.company_name, first.location_text, first.work_mode) == (
+        "Field CTO - Poland", "CoberonChronos", "Warsaw Metropolitan Area (Remote)", "remote")
+    assert (second.title, second.company_name, second.location_text, second.work_mode) == (
+        "Chief Technology Officer", "heedly", "Barcelona (Hybrid)", "hybrid")
+
+
+def test_linkedin_double_escaped_ampersand():
+    from vacancy_finder.collectors.email_alerts import clean_text
+
+    assert clean_text(" CTO &amp; Co-Founder ") == "CTO & Co-Founder"
+
+
 def test_unknown_sender_gives_no_postings():
     msg = linkedin_message()
     msg.from_address = "friend@example.com"
