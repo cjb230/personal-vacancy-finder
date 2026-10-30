@@ -2,7 +2,8 @@
 one interested, not interested or applied, and feedback notes (reject for, rate higher or
 lower for, score higher or lower) kept with a snapshot of the ad for tuning later. Filters
 narrow every tab to jobs first seen recently (or since a given time), above a minimum score,
-or closing soon, sorted by score, newest first or closing soonest. Served by the worker on WEB_PORT (8080), which
+or closing soon, sorted by score, newest first or closing soonest. Marking a job applied asks
+for when (default now) and the folder holding the application, both shown on the job. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -36,6 +37,7 @@ FEEDBACK = {
 FEEDBACK_SHORT = {"reject": "Rejected", "rate_higher": "Rate higher", "rate_lower": "Rate lower",
                   "score_higher": "Score higher", "score_lower": "Score lower"}
 NOTE_MAX = 2000
+DIR_MAX = 1000
 VIEWS = {
     "match": ("Matches", "s.verdict = 'match' AND r.decision IS NULL"),
     "maybe": ("Maybes", "s.verdict = 'maybe' AND r.decision IS NULL"),
@@ -70,7 +72,7 @@ FILTERS = """
 QUERY = """
 SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.decision,
        j.first_seen_at AT TIME ZONE %(tz)s, jc.closes_at AT TIME ZONE %(tz)s, jc.is_deadline,
-       jc.closes_at < now(),
+       jc.closes_at < now(), r.applied_at AT TIME ZONE %(tz)s, r.application_dir,
        (SELECT p.url FROM postings p WHERE p.job_id = j.id AND p.closed_at IS NULL
         ORDER BY p.last_seen_at DESC LIMIT 1) AS url,
        (SELECT string_agg(DISTINCT p.location_text, ' | ') FROM postings p
@@ -143,8 +145,34 @@ main { padding:8px 20px 40px; max-width:1100px; }
 .notes form { display:inline; } .notes span { display:inline-block; border:1px solid var(--line);
   border-radius:10px; padding:1px 4px 1px 8px; margin:2px 4px 2px 0; }
 .notes button { border:none; padding:0 4px; color:var(--muted); }
+.apply { margin:6px 0 0 46px; font-size:13px; display:flex; gap:6px; align-items:center;
+  flex-wrap:wrap; } .apply[hidden] { display:none; }
+.apply input { font:inherit; padding:3px 6px; border:1px solid var(--line); border-radius:6px;
+  background:var(--bg); color:var(--fg); } .apply input[name=application_dir] { flex:1; min-width:220px; max-width:520px; }
+.apply button { font-size:12px; padding:2px 8px; border:1px solid var(--line); border-radius:6px;
+  background:var(--bg); color:var(--fg); cursor:pointer; }
+.applied { margin:4px 0 0 46px; font-size:13px; }
+.applied code { user-select:all; background:var(--chip); border-radius:4px; padding:0 4px; }
 .pager { margin-top:16px; } .empty { color:var(--muted); padding:24px 0; }
-@media (max-width:600px) { .meta, .reasons, .actions, .feedback, .notes { margin-left:0; } }
+@media (max-width:600px) { .meta, .reasons, .actions, .feedback, .notes, .apply, .applied { margin-left:0; } }
+"""
+
+# Opens a job's "Applied" form. A job not yet applied gets the current time in DISPLAY_TZ,
+# so a page left open for hours still defaults to now.
+SCRIPT = """
+function openApply(id) {
+  const form = document.getElementById("apply-" + id);
+  form.hidden = !form.hidden;
+  if (form.hidden) return;
+  const when = form.elements.applied_at;
+  if (form.dataset.fresh) {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {timeZone: form.dataset.tz,
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+      hourCycle: "h23"}).formatToParts(new Date()).map(p => [p.type, p.value]));
+    when.value = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+  }
+  form.elements.application_dir.focus();
+}
 """
 
 
@@ -197,9 +225,14 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
         for (key, (label, _)), count in zip(VIEWS.items(), counts)
     )
     jobs = []
+    now = datetime.now(ZoneInfo(DISPLAY_TZ))
     for (job_id, job_title, company, verdict, score, level, reasons, decision, first_seen,
-         closes_at, is_deadline, closed_already, url, locations, sources) in rows:
+         closes_at, is_deadline, closed_already, applied_at, application_dir, url, locations,
+         sources) in rows:
+        # "Applied" opens a form asking when and where the application is, instead of saving.
         buttons = "".join(
+            f'<button type="button" onclick="openApply({job_id})" class="{"on" if decision == key else ""}">'
+            f"{label}</button>" if key == "applied" else
             f'<button name="decision" value="{key}" class="{"on" if decision == key else ""}">'
             f"{label}</button>"
             for key, label in DECISIONS.items()
@@ -219,7 +252,7 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     <input type="hidden" name="job_id" value="{job_id}">
     <input type="hidden" name="back" value="{back}">
     {buttons}{clear}</form>
-{render_notes(job_id, notes.get(job_id, []), back)}{render_feedback(job_id, back)}
+{render_apply(job_id, decision, applied_at, application_dir, now, back)}{render_notes(job_id, notes.get(job_id, []), back)}{render_feedback(job_id, back)}
 </div>""")
     pager = ""
     if len(rows) == PAGE_SIZE:
@@ -228,7 +261,7 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     body = "".join(jobs) or '<div class="empty">Nothing here yet.</div>'
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vacancy finder</title><style>{STYLE}</style></head><body>
+<title>Vacancy finder</title><style>{STYLE}</style><script>{SCRIPT}</script></head><body>
 <header><h1>Vacancy finder</h1><nav>{tabs}
 <form class="search" method="get"><input type="hidden" name="view" value="{esc(view)}">
 {hidden(keep)}<input name="q" value="{esc(q)}" placeholder="Search title or company"></form></nav>
@@ -248,6 +281,30 @@ def render_closing(closes_at: datetime | None, is_deadline: bool, passed: bool) 
     soon = closes_at - datetime.now(ZoneInfo(DISPLAY_TZ)).replace(tzinfo=None) < timedelta(days=2)
     label = "apply by" if is_deadline else "ad ends"
     return f' · <span class="{"soon" if soon else ""}">{label} {when}</span>'
+
+
+def render_apply(job_id: int, decision: str | None, applied_at: datetime | None,
+                 application_dir: str | None, now: datetime, back: str) -> str:
+    """The applied date and folder for an applied job, and the hidden form that "Applied" opens
+    to set or change them. applied_at is a DISPLAY_TZ local time."""
+    applied = decision == "applied"
+    shown = ""
+    if applied:
+        folder = (f' · folder <code>{esc(application_dir)}</code>' if application_dir
+                  else " · no folder given")
+        when = f"{applied_at:%d %b %Y %H:%M}" if applied_at else "date not recorded"
+        shown = f'<div class="applied">Applied {when}{folder}</div>'
+    value = (applied_at if applied and applied_at else now).strftime("%Y-%m-%dT%H:%M")
+    return f"""{shown}<form class="apply" id="apply-{job_id}" method="post" action="/review" hidden
+  data-tz="{esc(DISPLAY_TZ)}"{"" if applied else ' data-fresh="1"'}>
+  <input type="hidden" name="job_id" value="{job_id}"><input type="hidden" name="back" value="{back}">
+  <input type="hidden" name="decision" value="applied">
+  <label>Applied on <input type="datetime-local" name="applied_at" value="{value}" required></label>
+  <input type="text" name="application_dir" value="{esc(application_dir if applied else "")}"
+    maxlength="{DIR_MAX}" placeholder="Folder with the application, e.g. ~/Jobs/Orbit">
+  <button>{"Save" if applied else "Mark applied"}</button>
+  <button type="button" onclick="openApply({job_id})">Cancel</button></form>
+"""
 
 
 def hidden(fields: dict) -> str:
@@ -345,9 +402,24 @@ def delete_feedback(feedback_id: int) -> None:
         conn.execute("DELETE FROM job_feedback WHERE id = %s", (feedback_id,))
 
 
-def save_review(job_id: int, decision: str) -> None:
+def save_review(job_id: int, decision: str, applied_at: datetime | None = None,
+                application_dir: str = "") -> None:
+    """applied_at (a DISPLAY_TZ local time, default now) and application_dir are kept only for
+    "applied". Other decisions leave them alone, so a stray click loses nothing; Clear drops them."""
     with connect() as conn:
-        if decision:
+        if decision == "applied":
+            conn.execute(
+                """
+                INSERT INTO job_reviews (job_id, decision, applied_at, application_dir)
+                VALUES (%(job_id)s, 'applied',
+                        coalesce(%(at)s::timestamp AT TIME ZONE %(tz)s, now()), NULLIF(%(dir)s, ''))
+                ON CONFLICT (job_id) DO UPDATE SET decision = EXCLUDED.decision,
+                    applied_at = EXCLUDED.applied_at, application_dir = EXCLUDED.application_dir,
+                    updated_at = now()
+                """,
+                {"job_id": job_id, "at": applied_at, "tz": DISPLAY_TZ, "dir": application_dir},
+            )
+        elif decision:
             conn.execute(
                 """
                 INSERT INTO job_reviews (job_id, decision) VALUES (%s, %s)
@@ -394,7 +466,14 @@ class Handler(BaseHTTPRequestHandler):
             if decision and decision not in DECISIONS:
                 self.send_error(HTTPStatus.BAD_REQUEST)
                 return
-            save_review(key, decision)
+            when = form.get("applied_at", [""])[0].strip()
+            try:
+                applied_at = datetime.fromisoformat(when) if when else None
+            except ValueError:
+                self.send_error(HTTPStatus.BAD_REQUEST)
+                return
+            folder = form.get("application_dir", [""])[0].strip()[:DIR_MAX]
+            save_review(key, decision, applied_at, folder)
         elif path == "/feedback":
             kind = form.get("kind", [""])[0]
             note = form.get("note", [""])[0].strip()[:NOTE_MAX]

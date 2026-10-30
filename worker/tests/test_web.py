@@ -1,6 +1,7 @@
 """Scoring stored jobs and the results page, against a real database."""
 
 import os
+from datetime import datetime
 
 import pytest
 
@@ -141,3 +142,34 @@ def test_closing_filter_and_sort(conn, monkeypatch):  # noqa: F811
     order = [by_closing.index(t) for t in ("Engineering Manager", "Staff Python Engineer",
                                            "Head of Engineering")]
     assert order == sorted(order)
+
+
+def test_applied_records_when_and_where(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    source = ensure_source(conn, "test", "Test board", "board")
+    upsert_posting(conn, source, RawPosting(
+        external_id="1", url="https://x.example/1", title="Engineering Manager",
+        company_name="Orbit", location_text="Remote, Europe", work_mode="remote",
+        description="Python and PostgreSQL for satellite imagery. You will lead the team."))
+    conn.commit()
+    score_all(conn)
+    job_id = conn.execute("SELECT id FROM jobs").fetchone()[0]
+
+    page = web.render("match", "", 0)
+    assert f'id="apply-{job_id}"' in page and 'data-fresh="1"' in page
+    assert f'onclick="openApply({job_id})"' in page
+
+    web.save_review(job_id, "applied", datetime(2026, 10, 30, 2, 45), "~/Jobs/Orbit & Co")
+    applied = web.render("applied", "", 0)
+    assert "Applied 30 Oct 2026 02:45" in applied  # Warsaw time, as entered
+    assert "<code>~/Jobs/Orbit &amp; Co</code>" in applied
+    assert 'value="2026-10-30T02:45"' in applied and "data-fresh" not in applied
+    stored = conn.execute("SELECT applied_at AT TIME ZONE 'UTC' FROM job_reviews").fetchone()[0]
+    assert stored == datetime(2026, 10, 30, 1, 45)  # CET is UTC+1 after the clocks change
+
+    # Another decision keeps the details; applying again without a time means now.
+    web.save_review(job_id, "interested")
+    assert conn.execute("SELECT application_dir FROM job_reviews").fetchone()[0] == "~/Jobs/Orbit & Co"
+    web.save_review(job_id, "applied")
+    assert "no folder given" in web.render("applied", "", 0)
+    assert conn.execute("SELECT applied_at > now() - interval '1 minute' FROM job_reviews").fetchone()[0]
