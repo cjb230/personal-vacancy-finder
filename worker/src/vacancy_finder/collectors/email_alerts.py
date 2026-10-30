@@ -225,11 +225,22 @@ class AlertParser:
                 title=title or "(untitled)",
                 company_name=company or "(unknown company)",
                 location_text=location,
-                work_mode=guess_work_mode(location),
+                work_mode=work_mode(title, location),
                 posted_at=msg.received_at,
                 raw={"platform": self.platform, "subject": msg.subject,
                      "card_text": card_lines(job)[:12]},
             )
+
+
+_REMOTE_TITLE = re.compile(r"\bremote\b(?!\s+sens)", re.I)  # not "Remote Sensing Engineer"
+
+
+def work_mode(title: str | None, location: str | None) -> str:
+    """From the location, unless the title says the job is remote: LinkedIn shows
+    "Senior EM (100% Remote within Poland)" with the location "Warsaw (On-site)"."""
+    if title and _REMOTE_TITLE.search(title):
+        return "remote"
+    return guess_work_mode(location)
 
 
 def card_lines(job: JobLink) -> list[str]:

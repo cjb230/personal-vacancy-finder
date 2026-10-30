@@ -72,6 +72,14 @@ def test_linkedin_double_escaped_ampersand():
     assert clean_text("HRS Hospitality &amp;amp; Retail") == "HRS Hospitality & Retail"
 
 
+def test_remote_in_title_beats_onsite_location():
+    from vacancy_finder.collectors.email_alerts import work_mode
+
+    assert work_mode("Senior EM (100% Remote within Poland)", "Warsaw (On-site)") == "remote"
+    assert work_mode("Remote Sensing Engineer", "Warsaw (On-site)") == "onsite"
+    assert work_mode("Engineering Manager", "Poland (Remote)") == "remote"
+
+
 def test_unknown_sender_gives_no_postings():
     msg = linkedin_message()
     msg.from_address = "friend@example.com"
