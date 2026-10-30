@@ -10,21 +10,24 @@ import csv
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import xml.etree.ElementTree as ET
 
 import httpx
 
 from .collectors.ats import ATS_COLLECTORS, USER_AGENT, TrackedCompany
-from .collectors.more_ats import PersonioCollector, RecruiteeCollector, TraffitCollector
+from .collectors.more_ats import (PersonioCollector, RecruiteeCollector, TeamtailorCollector,
+                                  TraffitCollector)
 
 # Each feed to try, with how a slug guess becomes that feed's ats_slug.
-# Teamtailor and plain careers pages live on the company's own domain, so can't be guessed.
+# Teamtailor sites on the company's own domain, and plain careers pages, can't be guessed.
 PROBES = [(c, lambda slug: slug) for c in ATS_COLLECTORS] + [
     (RecruiteeCollector(), lambda slug: slug),
     (TraffitCollector(), lambda slug: slug),
     (PersonioCollector(), lambda slug: f"{slug}.jobs.personio.de"),
     (PersonioCollector(), lambda slug: f"{slug}.jobs.personio.com"),
+    (TeamtailorCollector(), lambda slug: f"{slug}.teamtailor.com"),
 ]
 from .normalize import normalize_company
 
@@ -48,7 +51,7 @@ def count_jobs(payload) -> int:
     if isinstance(payload, list):
         return len(payload)
     if isinstance(payload, ET.Element):
-        return len(payload.findall("position"))
+        return len(payload.findall("position")) or len(list(payload.iter("item")))
     return len(payload.get("jobs") or payload.get("offers") or [])
 
 
@@ -91,25 +94,31 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("names", nargs="*", help="company names; add slugs to try as NAME=slug1,slug2")
     parser.add_argument("--file", help="read names from a file, one per line, # for comments")
-    parser.add_argument("--delay", type=float, default=1.0, help="seconds between companies")
+    parser.add_argument("--delay", type=float, default=1.0, help="seconds between companies, per worker")
+    parser.add_argument("--workers", type=int, default=1, help="companies probed at once")
     args = parser.parse_args()
     names = list(args.names)
     if args.file:
         with open(args.file, encoding="utf-8") as f:
             names += [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
+    def probe_one(i_arg: tuple[int, str]) -> tuple[str, list[tuple[str, str, int, str]]]:
+        i, arg = i_arg
+        if i >= args.workers:
+            time.sleep(args.delay)
+        name, _, extra = arg.partition("=")
+        return name, probe(client, name, [s for s in extra.split(",") if s])
+
     out = csv.writer(sys.stdout)
-    with httpx.Client(timeout=20, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
-        for i, arg in enumerate(names):
-            if i:
-                time.sleep(args.delay)
-            name, _, extra = arg.partition("=")
-            hits = probe(client, name, [s for s in extra.split(",") if s])
+    with httpx.Client(timeout=20, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client, \
+            ThreadPoolExecutor(args.workers) as pool:
+        for name, hits in pool.map(probe_one, enumerate(names)):
             if not hits:
                 print(f"# {name}: no ATS feed found", file=sys.stderr)
             for kind, slug, jobs, check in hits:
                 print(f"# {name}: {kind}/{slug} has {jobs} open jobs; {check}", file=sys.stderr)
                 out.writerow([name, "", kind, slug, "", "", "", ""])
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":
