@@ -1,0 +1,290 @@
+# Third round of companies to probe, gathered 2026-10-30 from sector knowledge, investor
+# portfolios and the boards that earlier rounds turned up. Not yet checked against live feeds:
+#   python -m vacancy_finder.probe --workers 4 --file seeds/candidates-round3.txt > probe-round3.csv
+# Same format as candidates.txt: NAME, or NAME=slug1,slug2 for slugs to try first.
+# Space and Earth observation
+Satellogic=satellogic
+Exotrail=exotrail
+Unseenlabs=unseenlabs
+D-Orbit=d-orbit,dorbit
+Open Cosmos=open-cosmos,opencosmos
+Aerospacelab=aerospacelab
+Kayhan Space=kayhan
+Vyoma=vyoma
+Reflex Aerospace=reflexaerospace
+Rocket Factory Augsburg=rocketfactoryaugsburg,rfa
+Orbex=orbex
+Skyrora=skyrora
+Kineis=kineis
+Hydrosat=hydrosat
+Pixxel=pixxel
+EOS Data Analytics=eos-data-analytics
+EarthDaily Analytics=earthdailyanalytics
+Arca Dynamics
+Astrocast
+Swissto12
+Sateliot
+PLD Space=pldspace
+Zero 2 Infinity
+Alba Orbital
+Satellite Applications Catapult=satapps
+Earth-i
+Oxford Space Systems
+Space Forge=spaceforge
+Magdrive
+Orbit Fab=orbitfab
+Atmos Space Cargo=atmos
+Polaris Raumflugzeuge
+Mynaric=mynaric
+Dcubed
+Morpheus Space=morpheus-space
+Ienai Space
+Starlab Space=starlab
+Spaceium
+Spaceflux
+Arqit
+Satlantis
+Aurora Space
+# GIS, mapping and geospatial data
+Esri Polska
+Geoplace
+Hexagon
+Trimble
+Bentley Systems=bentley
+Cesium=cesium
+Mapillary
+Mapular
+Ordnance Survey
+Geoblink
+Iris.ai
+Vizzuality=vizzuality
+Lobelia Earth
+Cervest
+Tesselo
+Terrabotics
+Earthwave
+Sinergise
+GAF AG
+Spacemetric
+Astraea
+Planetek
+e-GEOS
+GeoSolutions
+Kartoza
+Mergin Maps=lutra
+Lutra Consulting
+Synthetaic
+Blackshark.ai=blackshark
+Vexcel Imaging=vexcel
+Ecometrica
+# Energy, grids and energy markets
+Ovo Energy=ovo
+Good Energy
+Ripple Energy
+Pod Point=podpoint
+Ohme=ohme
+Monta=monta
+Spirii
+Virta=virta
+Ampeco=ampeco
+Elvah
+Chargepoint=chargepoint
+Wallbox=wallbox
+Zaptec
+Easee
+Hive Power
+Grid Edge
+Gridcog
+Equilibrium Energy
+Tem=tem
+Field Energy
+Lumenaza
+Node.energy
+Ampere.cloud
+Zolar=zolar
+Otovo=otovo
+Svea Solar=sveasolar
+Sunsave
+Aira=aira
+Heat Geek
+Vaillant
+Quilt
+Cleanwatts
+Sunfire GmbH
+Enapter=enapter
+HH2E
+Elestor
+Corre Energy
+Freyr
+Verkor=verkor
+Forsee Power
+Nuvve
+The Mobility House=themobilityhouse
+ev.energy=evenergy
+Kiwi Power
+Voltalis
+Equota Energy
+Energy Pool
+Statkraft
+Fortum
+Polenergia
+Columbus Energy
+Photon Energy
+Enefit
+Eesti Energia
+Cleanhorizon
+Tomorrow.io
+Envision Digital
+Clir Renewables=clir
+Windward=windward
+Rystad Energy=rystadenergy
+LCP Delta
+Cornwall Insight
+ICIS
+Argus Media=argusmedia
+Energy Aspects=energyaspects
+Kpler=kpler
+Enverus=enverus
+# Climate, carbon and green tech software
+Pledge
+Cloverly
+Climeworks=climeworks
+Carbfix
+Puro.earth=puro
+South Pole=southpole
+Ecologi
+Supercritical
+Altruistiq
+Emitwise
+Tanso
+Briink
+Sustainalytics
+Clarity AI=clarityai
+Cogo
+Doconomy
+Plan Be Eco
+Ecochain
+Greenomy
+Treefera
+Single.Earth
+Back Market=backmarket
+Refurbed=refurbed
+Olio
+Phenix
+Winnow=winnow
+Karma
+Infarm
+Formo
+Solar Foods=solarfoods
+Kitro
+Ynsect
+# Health
+Medicover
+LUX MED
+HiDoctor
+Healthily
+Livi=livi
+Thriva=thriva
+Sword Health=swordhealth
+Hinge Health=hingehealth
+Vivira
+Mika Health
+Selfapy
+HelloBetter
+Clare&me
+ieso Digital Health
+Limbic=limbic
+Wysa
+Ksyos
+Elvie
+Peppy=peppy
+Maven Clinic=mavenclinic
+Numan=numan
+Qunomedical
+Siilo
+Pacmed
+Aidence
+Quantib
+Ultromics
+Optellum=optellum
+Lunit
+Annalise.ai
+Kheiron Medical=kheiron
+Skin Analytics=skinanalytics
+Isomorphic Labs=isomorphiclabs
+Exscientia
+Benevolent AI=benevolentai
+Recursion=recursion
+Insilico Medicine
+Ardigen
+Molecule.one
+Ryvu Therapeutics
+Biotts
+Captor Therapeutics
+Selvita
+Cellbitec
+# Edtech
+Duolingo=duolingo
+Quizlet=quizlet
+Coursera=coursera
+Pluralsight
+Codecademy
+Le Wagon=lewagon
+Ironhack=ironhack
+Turing College
+CodersLab
+Sages
+Kodilla
+StudySmarter=studysmarter
+Perlego=perlego
+Bookwidgets
+Seneca Learning=seneca
+Century Tech
+Third Space Learning
+Atom Learning=atomlearning
+Mentimeter=mentimeter
+Lepaya
+Hone
+Multiverse=multiverse
+CodeSignal=codesignal
+Learnship
+Lingokids
+Ling App
+Promova
+Mondly
+Italki
+Tandem=tandem
+Kinnu
+# Robotics, drones and automation
+Locus Robotics=locusrobotics
+Ocado Technology
+AutoStore=autostore
+Swisslog
+Knapp
+Brightpick=brightpick
+Mujin=mujin
+Formant=formant
+1X Technologies=1x
+Humanoid=humanoid
+Wayve=wayve
+Oxa=oxa
+Volocopter
+Lilium
+Skyports
+Flock Coatings
+Dronehub
+Percepto
+Airobotics
+Quantum Systems=quantum-systems
+Tekever
+Flyability
+Voliro
+Rapyuta Robotics
+Kinova
+Universal Robots
+Enabled Robotics
+Robotnik
+PAL Robotics
+Rovenso
+Gecko Robotics=geckorobotics
+Vention=vention

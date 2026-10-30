@@ -67,7 +67,7 @@ python -m vacancy_finder.probe "KP Labs" "ICEYE"
 python -m vacancy_finder.probe --file seeds/candidates.txt
 ```
 
-Check each hit's job count looks right before adding it, since a common name can match a different company. The probe waits `--delay` seconds (default 1) between companies. `seeds/candidates-round2.txt` holds a second, larger round of names from sector lists that hasn't been probed yet.
+Check each hit's job count looks right before adding it, since a common name can match a different company. The probe waits `--delay` seconds (default 1) between companies. `seeds/candidates-round2.txt` and `candidates-round3.txt` hold later rounds of names from sector lists. Probe several companies at once with `--workers 4`. Teamtailor sites on a `teamtailor.com` subdomain are probed too.
 
 The adverts already collected from boards (Hacker News, Himalayas, Arbeitnow and the rest) often link to the employer's own ATS board. To list the boards they link to that aren't in the company list yet, with the best-scoring ones first, run against the database:
 
