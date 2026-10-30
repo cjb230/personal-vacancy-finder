@@ -67,7 +67,13 @@ python -m vacancy_finder.probe "KP Labs" "ICEYE"
 python -m vacancy_finder.probe --file seeds/candidates.txt
 ```
 
-Check each hit's job count looks right before adding it, since a common name can match a different company.
+Check each hit's job count looks right before adding it, since a common name can match a different company. The probe waits `--delay` seconds (default 1) between companies. `seeds/candidates-round2.txt` holds a second, larger round of names from sector lists that hasn't been probed yet.
+
+The adverts already collected from boards (Hacker News, Himalayas, Arbeitnow and the rest) often link to the employer's own ATS board. To list the boards they link to that aren't in the company list yet, with the best-scoring ones first, run against the database:
+
+```sh
+DATABASE_URL=postgresql://vacancies:...@127.0.0.1:5432/vacancies python -m vacancy_finder.discover > found.csv
+```
 
 If one company's feed fails, its postings are left open rather than closed, and the run carries on with the rest.
 

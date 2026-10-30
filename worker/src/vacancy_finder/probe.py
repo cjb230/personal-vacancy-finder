@@ -9,6 +9,7 @@ import argparse
 import csv
 import re
 import sys
+import time
 
 import xml.etree.ElementTree as ET
 
@@ -90,6 +91,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("names", nargs="*", help="company names; add slugs to try as NAME=slug1,slug2")
     parser.add_argument("--file", help="read names from a file, one per line, # for comments")
+    parser.add_argument("--delay", type=float, default=1.0, help="seconds between companies")
     args = parser.parse_args()
     names = list(args.names)
     if args.file:
@@ -98,7 +100,9 @@ def main() -> None:
 
     out = csv.writer(sys.stdout)
     with httpx.Client(timeout=20, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
-        for arg in names:
+        for i, arg in enumerate(names):
+            if i:
+                time.sleep(args.delay)
             name, _, extra = arg.partition("=")
             hits = probe(client, name, [s for s in extra.split(",") if s])
             if not hits:
