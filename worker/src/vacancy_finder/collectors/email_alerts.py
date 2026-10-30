@@ -273,8 +273,12 @@ def linkedin_card(job: JobLink) -> tuple[str | None, str | None, str | None]:
 
 
 def clean_text(text: str) -> str | None:
-    # Some alerts escape twice ("&amp;amp;"), so a single unescape by the parser leaves "&amp;".
-    return " ".join(html.unescape(text).split()) or None
+    # LinkedIn escapes some text more than once ("&amp;amp;..."), so unescape until stable.
+    for _ in range(3):
+        if (unescaped := html.unescape(text)) == text:
+            break
+        text = unescaped
+    return " ".join(text.split()) or None
 
 
 PARSERS = [

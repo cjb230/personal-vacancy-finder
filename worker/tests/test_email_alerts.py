@@ -69,6 +69,7 @@ def test_linkedin_double_escaped_ampersand():
     from vacancy_finder.collectors.email_alerts import clean_text
 
     assert clean_text(" CTO &amp; Co-Founder ") == "CTO & Co-Founder"
+    assert clean_text("HRS Hospitality &amp;amp; Retail") == "HRS Hospitality & Retail"
 
 
 def test_unknown_sender_gives_no_postings():
