@@ -5,7 +5,7 @@ Finds job vacancies across many sources and collects them into one Postgres data
 Two containers run under Docker Compose:
 
 - **db**: Postgres 18, holding sources, companies, jobs and postings. Data lives in the `pgdata18` volume.
-- **worker**: a Python process that applies database migrations on start, then runs every registered collector on a fixed interval.
+- **worker**: a Python process that applies database migrations on start, then runs each collector on its own interval: the job-alert inbox every 15 minutes, job boards every 2 hours and company careers feeds every 6 hours (`EMAIL_INTERVAL_MINUTES`, `BOARD_INTERVAL_MINUTES`, `ATS_INTERVAL_MINUTES` in `.env`). Each source is due once its interval has passed since its last run started, so a restart only runs what is due, and sources run one after another, never at the same time.
 
 ## Running it
 
@@ -19,7 +19,7 @@ The database is published on `127.0.0.1:5432` (change with `POSTGRES_PORT`), so 
 
 ## Results page
 
-The worker scores every open job against the search criteria after each cycle and serves a results page at http://localhost:8080 (this machine only; change the port with `WEB_PORT` in `.env`). Jobs are ranked by score, with the reasons shown under each one. Tabs split them into matches, maybes and filtered-out jobs, and buttons mark a job interested, not interested or applied; marked jobs move to their own tabs and stay marked across rescoring.
+The worker scores every open job against the search criteria after each round of collection and serves a results page at http://localhost:8080 (this machine only; change the port with `WEB_PORT` in `.env`). Jobs are ranked by score, with the reasons shown under each one. Tabs split them into matches, maybes and filtered-out jobs, and buttons mark a job interested, not interested or applied; marked jobs move to their own tabs and stay marked across rescoring.
 
 Filters above the list narrow every tab, and the tab counts, to jobs first seen in the last 6 hours, 24 hours, 3, 7 or 30 days, or since a date and time you pick, and to a minimum score. Each job shows the date and time it was first seen, in Warsaw time (change with `DISPLAY_TZ`). Sort by best score (the default) or newest first. The filters are part of the page address, so a bookmark such as http://localhost:8080/?seen=24&sort=new opens the last day's finds.
 
@@ -57,7 +57,7 @@ See [docs/job-sources.md](docs/job-sources.md) for the source map and build orde
 
 ### Company careers feeds
 
-The careers-feed collectors poll every company in `worker/seeds/companies.csv` that has an `ats_kind` and `ats_slug`. The file is mounted into the worker, so edits apply on the next cycle without a rebuild. Columns: `name`, `sectors` (separated by `;`), `ats_kind`, `ats_slug`, `website`, `notes`, `careers_url`, `link_pattern`.
+The careers-feed collectors poll every company in `worker/seeds/companies.csv` that has an `ats_kind` and `ats_slug`. The file is mounted into the worker, so edits apply on the next round without a rebuild. Columns: `name`, `sectors` (separated by `;`), `ats_kind`, `ats_slug`, `website`, `notes`, `careers_url`, `link_pattern`.
 
 | `ats_kind` | `ats_slug` |
 |---|---|
