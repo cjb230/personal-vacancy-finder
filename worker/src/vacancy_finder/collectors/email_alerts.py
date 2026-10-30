@@ -1,16 +1,20 @@
-"""Job-alert emails from sites we can't collect from directly: LinkedIn, Otta (Welcome to
-the Jungle) and No Fluff Jobs.
+"""Job-alert emails from sites we can't collect from directly: LinkedIn, Welcome to the
+Jungle (Otta) and No Fluff Jobs.
 
-The alerts inbox is read over IMAP in read-only mode, so nothing is marked read or moved.
-Each new message is stored in email_messages; then every alert from the last
-EMAIL_ALERT_DAYS is parsed again, so parser fixes apply to old alerts too. A posting
-stays open while its newest alert is inside that window and closes after.
+Each run stores every new alert (from a sender with a parser) in email_messages, then re-parses the
+alerts of the last EMAIL_ALERT_DAYS, so parser fixes apply to old alerts too. A posting stays
+open while its newest alert is inside that window and closes after.
+
+Messages that gave at least one posting are moved out of the inbox to IMAP_TRASH_FOLDER (or
+deleted outright if that is empty); the stored copy stays in the database. Anything else
+stays in the inbox, unread, so what is left there shows where the parsers fall short.
 
 Settings: IMAP_USER and IMAP_PASSWORD (required, or the collector is off), IMAP_HOST
-(default poczta.interia.pl), IMAP_PORT (993), IMAP_FOLDER (INBOX), EMAIL_ALERT_DAYS (30).
+(default imap.mail.me.com, iCloud), IMAP_PORT (993), IMAP_FOLDER (INBOX), IMAP_TRASH_FOLDER
+("Deleted Messages", iCloud's bin), EMAIL_ALERT_DAYS (30).
 
-The parsers are first drafts until fitted to real alerts: they find job links by URL and
-read the title and the company / location lines around each link.
+The parsers find job links by URL and read the title and the company / location lines
+around each link.
 """
 
 import email
@@ -41,6 +45,7 @@ class ImapSettings:
     user: str
     password: str
     folder: str
+    trash_folder: str = "Deleted Messages"  # empty: delete outright
 
     @property
     def mailbox(self) -> str:
@@ -52,11 +57,12 @@ def imap_settings_from_env() -> ImapSettings | None:
     if not (user and password):
         return None
     return ImapSettings(
-        host=os.environ.get("IMAP_HOST") or "poczta.interia.pl",
+        host=os.environ.get("IMAP_HOST") or "imap.mail.me.com",
         port=int(os.environ.get("IMAP_PORT") or "993"),
         user=user,
         password=password,
         folder=os.environ.get("IMAP_FOLDER") or "INBOX",
+        trash_folder=os.environ.get("IMAP_TRASH_FOLDER", "Deleted Messages"),
     )
 
 
@@ -102,30 +108,89 @@ def check_login_alert(login_data: list, untagged: dict) -> None:
             raise RuntimeError(f"IMAP server refused access after login: {text}")
 
 
-def fetch_new(settings: ImapSettings, known_uids: Callable[[int], set[int]], since: datetime,
-              limit: int | None = None) -> tuple[int, list[StoredMessage]]:
-    """Messages since `since` whose UIDs aren't known yet, at most the newest `limit`.
-    Returns (uidvalidity, messages)."""
-    with imaplib.IMAP4_SSL(settings.host, settings.port, timeout=60) as imap:
-        _, data = imap.login(settings.user, settings.password)
-        check_login_alert(data, imap.untagged_responses)
-        status, _ = imap.select(settings.folder, readonly=True)
-        if status != "OK":
-            raise RuntimeError(f"cannot open folder {settings.folder!r}")
-        uidvalidity = int(re.search(rb"\d+", imap.response("UIDVALIDITY")[1][0]).group())
-        _, data = imap.uid("SEARCH", None, "SINCE", since.strftime("%d-%b-%Y"))
-        uids = [int(u) for u in data[0].split()] if data and data[0] else []
-        known = known_uids(uidvalidity)
-        uids = [uid for uid in uids if uid not in known]
-        if limit:
-            uids = uids[-limit:]
-        messages = []
-        for uid in uids:
-            _, parts = imap.uid("FETCH", str(uid), "(BODY.PEEK[])")  # PEEK leaves it unread
-            raw = next((p[1] for p in parts if isinstance(p, tuple)), None)
-            if raw:
-                messages.append(to_stored(raw, uid))
-        return uidvalidity, messages
+class Inbox:
+    """One IMAP session on the alerts folder. Opened read-only unless `writable`."""
+
+    def __init__(self, settings: ImapSettings, writable: bool = False) -> None:
+        self.settings = settings
+        self.writable = writable
+
+    def __enter__(self) -> "Inbox":
+        self.imap = imaplib.IMAP4_SSL(self.settings.host, self.settings.port, timeout=60)
+        try:
+            _, data = self.imap.login(self.settings.user, self.settings.password)
+            check_login_alert(data, self.imap.untagged_responses)
+            status, _ = self.imap.select(_quote(self.settings.folder), readonly=not self.writable)
+            if status != "OK":
+                raise RuntimeError(f"cannot open folder {self.settings.folder!r}")
+            self.uidvalidity = int(
+                re.search(rb"\d+", self.imap.response("UIDVALIDITY")[1][0]).group()
+            )
+        except BaseException:
+            self.imap.shutdown()
+            raise
+        return self
+
+    def __exit__(self, *exc) -> None:
+        try:
+            self.imap.logout()
+        except (imaplib.IMAP4.error, OSError):
+            pass
+
+    def uids(self, since: datetime | None = None) -> list[int]:
+        criteria = ("SINCE", since.strftime("%d-%b-%Y")) if since else ("ALL",)
+        _, data = self.imap.uid("SEARCH", None, *criteria)
+        return [int(u) for u in data[0].split()] if data and data[0] else []
+
+    def senders(self, uids: list[int]) -> dict[int, str | None]:
+        """The From address of each message, without downloading the rest."""
+        if not uids:
+            return {}
+        _, parts = self.imap.uid(
+            "FETCH", ",".join(map(str, uids)), "(UID BODY.PEEK[HEADER.FIELDS (FROM)])"
+        )
+        found = {}
+        for part in parts:
+            if isinstance(part, tuple) and (m := re.search(rb"UID (\d+)", part[0])):
+                header = email.message_from_bytes(part[1], policy=email.policy.default)
+                found[int(m.group(1))] = parseaddr(str(header["From"] or ""))[1].lower() or None
+        return found
+
+    def fetch(self, uid: int) -> StoredMessage | None:
+        _, parts = self.imap.uid("FETCH", str(uid), "(BODY.PEEK[])")  # PEEK leaves it unread
+        raw = next((p[1] for p in parts if isinstance(p, tuple)), None)
+        return to_stored(raw, uid) if raw else None
+
+    def remove(self, uids: list[int]) -> None:
+        """Moves the messages to the trash folder, or deletes them if there is none."""
+        if not uids:
+            return
+        if not self.writable:
+            raise RuntimeError("inbox was opened read-only")
+        uid_set = ",".join(map(str, uids))
+        trash = self.settings.trash_folder
+        if trash and b"MOVE" in self._capabilities():
+            status, data = self.imap.uid("MOVE", uid_set, _quote(trash))
+            if status != "OK":
+                raise RuntimeError(f"cannot move messages to {trash!r}: {data}")
+            return
+        if trash:
+            status, data = self.imap.uid("COPY", uid_set, _quote(trash))
+            if status != "OK":
+                raise RuntimeError(f"cannot copy messages to {trash!r}: {data}")
+        self.imap.uid("STORE", uid_set, "+FLAGS.SILENT", r"(\Deleted)")
+        if b"UIDPLUS" in self._capabilities():
+            self.imap.uid("EXPUNGE", uid_set)  # only these, not others marked deleted
+        else:
+            self.imap.expunge()
+
+    def _capabilities(self) -> set[bytes]:
+        _, data = self.imap.capability()
+        return set(data[0].upper().split()) if data and data[0] else set()
+
+
+def _quote(folder: str) -> str:
+    return f'"{folder}"' if " " in folder and not folder.startswith('"') else folder
 
 
 # --- parsers, one per alert sender ---------------------------------------------------------
@@ -185,9 +250,12 @@ PARSERS = [
     AlertParser("linkedin", re.compile(r"linkedin\.com$"),
                 re.compile(r"linkedin\.com/(?:comm/)?jobs/view/(\d+)"),
                 "https://www.linkedin.com/jobs/view/{id}/"),
-    AlertParser("otta", re.compile(r"(otta\.com|welcometothejungle\.com)$"),
-                re.compile(r"(?:otta\.com|welcometothejungle\.com)/jobs/([A-Za-z0-9_-]+)"),
-                "https://app.welcometothejungle.com/jobs/{id}"),
+    # Welcome to the Jungle links are either app.welcometothejungle.com/jobs/{id} (the old Otta
+    # app) or www.welcometothejungle.com/{lang}/companies/{company}/jobs/{slug}.
+    AlertParser("wttj", re.compile(r"(otta\.com|welcometothejungle\.com)$"),
+                re.compile(r"(?:otta\.com|welcometothejungle\.com)/"
+                           r"((?:[a-z]{2}/)?(?:companies/[\w-]+/)?jobs/[\w-]+)"),
+                "https://www.welcometothejungle.com/{id}"),
     AlertParser("nofluffjobs", re.compile(r"nofluffjobs\.com$"),
                 re.compile(r"nofluffjobs\.com/(?:[a-z]{2}/)?job/([a-z0-9-]+)"),
                 "https://nofluffjobs.com/job/{id}"),
@@ -214,7 +282,7 @@ def parse_message(msg: StoredMessage) -> list[RawPosting]:
 
 class EmailAlertsCollector:
     source_key = "email_alerts"
-    source_name = "Job-alert emails (LinkedIn, Otta, No Fluff Jobs)"
+    source_name = "Job-alert emails (LinkedIn, Welcome to the Jungle, No Fluff Jobs)"
     source_kind = "email"
 
     def __init__(self, settings: ImapSettings, days: int | None = None) -> None:
@@ -227,28 +295,44 @@ class EmailAlertsCollector:
     def collect(self, conn: psycopg.Connection) -> Iterator[RawPosting]:
         since = datetime.now(UTC) - timedelta(days=self.days)
         mailbox = self.settings.mailbox
+        with Inbox(self.settings, writable=True) as inbox:
+            stored = {
+                uid: StoredMessage(*rest)
+                for uid, *rest in conn.execute(
+                    """
+                    SELECT uid, from_address, subject, received_at, body_html, body_text
+                    FROM email_messages WHERE mailbox = %s AND uidvalidity = %s
+                    """,
+                    (mailbox, inbox.uidvalidity),
+                )
+            }
+            # Only alerts from senders we have a parser for are downloaded; the rest of the
+            # inbox is never read.
+            unseen = [uid for uid in inbox.uids(since) if uid not in stored]
+            new = []
+            for uid, sender in inbox.senders(unseen).items():
+                if parser_for(sender) and (m := inbox.fetch(uid)):
+                    new.append(m)
+                    stored[uid] = m
+            for m in new:
+                conn.execute(
+                    """
+                    INSERT INTO email_messages (mailbox, uidvalidity, uid, message_id,
+                        from_address, subject, received_at, body_html, body_text)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (mailbox, inbox.uidvalidity, m.uid, m.message_id, m.from_address,
+                     m.subject, m.received_at, m.body_html, m.body_text),
+                )
+            conn.commit()  # stored before anything leaves the server
 
-        def known_uids(uidvalidity: int) -> set[int]:
-            rows = conn.execute(
-                "SELECT uid FROM email_messages WHERE mailbox = %s AND uidvalidity = %s",
-                (mailbox, uidvalidity),
-            ).fetchall()
-            return {uid for (uid,) in rows}
-
-        uidvalidity, new = fetch_new(self.settings, known_uids, since)
-        for m in new:
-            conn.execute(
-                """
-                INSERT INTO email_messages (mailbox, uidvalidity, uid, message_id, from_address,
-                                            subject, received_at, body_html, body_text)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT DO NOTHING
-                """,
-                (mailbox, uidvalidity, m.uid, m.message_id, m.from_address, m.subject,
-                 m.received_at, m.body_html, m.body_text),
-            )
-        conn.commit()
-        log.info("email_alerts: %d new messages", len(new))
+            # Everything still in the inbox that now parses goes, including older messages
+            # that an improved parser has learned to read.
+            parsed = [uid for uid in inbox.uids() if uid in stored and parse_message(stored[uid])]
+            inbox.remove(parsed)
+            log.info("email_alerts: %d new messages, %d parsed and removed from %s",
+                     len(new), len(parsed), self.settings.folder)
 
         # Oldest first, so each posting ends up with the details of its latest mention.
         rows = conn.execute(

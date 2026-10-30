@@ -33,7 +33,8 @@ def test_decodes_message():
 
 def test_parser_chosen_by_sender_domain():
     assert parser_for("jobalerts-noreply@linkedin.com").platform == "linkedin"
-    assert parser_for("hello@mail.welcometothejungle.com").platform == "otta"
+    assert parser_for("hello@mail.welcometothejungle.com").platform == "wttj"
+    assert parser_for("help@welcometothejungle.com").platform == "wttj"
     assert parser_for("alerts@nofluffjobs.com").platform == "nofluffjobs"
     assert parser_for("friend@example.com") is None
 
@@ -70,36 +71,146 @@ def test_off_without_credentials(monkeypatch):
     monkeypatch.delenv("IMAP_USER", raising=False)
     monkeypatch.delenv("IMAP_PASSWORD", raising=False)
     assert email_alerts.email_collectors() == []
-    monkeypatch.setenv("IMAP_USER", "me@interia.pl")
+    monkeypatch.setenv("IMAP_USER", "me@icloud.com")
     monkeypatch.setenv("IMAP_PASSWORD", "x")
+    monkeypatch.delenv("IMAP_TRASH_FOLDER", raising=False)
     (collector,) = email_alerts.email_collectors()
-    assert collector.settings.host == "poczta.interia.pl"
+    assert collector.settings.host == "imap.mail.me.com"
+    assert collector.settings.trash_folder == "Deleted Messages"
+
+
+def test_wttj_links():
+    html = """<table>
+      <tr><td><a href="https://www.welcometothejungle.com/en/companies/acme-space/jobs/engineering-manager_warsaw?utm_source=alert">Engineering Manager</a>
+        <p>Acme Space</p><p>Warsaw, Poland</p></td></tr>
+      <tr><td><a href="https://app.welcometothejungle.com/jobs/AbC123xy">Staff Engineer</a>
+        <p>Beta Orbital</p><p>Remote</p></td></tr>
+      <tr><td><a href="https://www.welcometothejungle.com/en/jobs?query=python">See more jobs</a></td></tr>
+    </table>"""
+    msg = email_alerts.StoredMessage("help@welcometothejungle.com", "New jobs", None, html, None)
+    first, second = parse_message(msg)
+    assert first.url == "https://www.welcometothejungle.com/en/companies/acme-space/jobs/engineering-manager_warsaw"
+    assert (first.title, first.company_name, first.location_text) == ("Engineering Manager", "Acme Space", "Warsaw, Poland")
+    assert second.url == "https://www.welcometothejungle.com/jobs/AbC123xy"
+    assert second.company_name == "Beta Orbital"
+
+
+class FakeImap:
+    def __init__(self, capabilities):
+        self.caps = capabilities
+        self.calls = []
+
+    def capability(self):
+        return "OK", [self.caps]
+
+    def uid(self, *args):
+        self.calls.append(args)
+        return "OK", [b""]
+
+    def expunge(self):
+        self.calls.append(("EXPUNGE-ALL",))
+        return "OK", [b""]
+
+
+@pytest.mark.parametrize(
+    ("caps", "trash", "expected"),
+    [
+        (b"IMAP4rev1 MOVE UIDPLUS", "Deleted Messages", [("MOVE", "3,7", '"Deleted Messages"')]),
+        (b"IMAP4rev1 UIDPLUS", "Deleted Messages", [
+            ("COPY", "3,7", '"Deleted Messages"'),
+            ("STORE", "3,7", "+FLAGS.SILENT", r"(\Deleted)"),
+            ("EXPUNGE", "3,7"),
+        ]),
+        (b"IMAP4rev1 MOVE", "", [("STORE", "3,7", "+FLAGS.SILENT", r"(\Deleted)"), ("EXPUNGE-ALL",)]),
+    ],
+)
+def test_remove_moves_to_trash_or_deletes(caps, trash, expected):
+    settings = ImapSettings("imap.example", 993, "me@example", "pw", "INBOX", trash)
+    inbox = email_alerts.Inbox(settings, writable=True)
+    inbox.imap = FakeImap(caps)
+    inbox.remove([3, 7])
+    assert inbox.imap.calls == expected
+
+
+def test_read_only_inbox_never_removes():
+    inbox = email_alerts.Inbox(SETTINGS)
+    inbox.imap = FakeImap(b"MOVE")
+    with pytest.raises(RuntimeError):
+        inbox.remove([1])
 
 
 from .test_store import DB_URL, conn, count  # noqa: E402,F401  (conn is a fixture)
 
 
+class FakeInbox:
+    """The alerts folder: uid -> (sender, message or None)."""
+
+    def __init__(self, messages, uidvalidity=77):
+        self.messages = messages
+        self.uidvalidity = uidvalidity
+        self.fetched = []
+        self.removed = []
+
+    def __call__(self, settings, writable=False):
+        assert writable
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def uids(self, since=None):
+        return sorted(self.messages)
+
+    def senders(self, uids):
+        return {uid: self.messages[uid][0] for uid in uids}
+
+    def fetch(self, uid):
+        self.fetched.append(uid)
+        return self.messages[uid][1]
+
+    def remove(self, uids):
+        self.removed.extend(uids)
+        for uid in uids:
+            del self.messages[uid]
+
+
+def fresh_linkedin(uid):
+    msg = linkedin_message(uid=uid)
+    msg.received_at = datetime.now(UTC)
+    return msg
+
+
 @pytest.mark.skipif(not DB_URL, reason="TEST_DATABASE_URL not set")
-def test_stores_new_messages_once_and_collects(conn, monkeypatch):  # noqa: F811
+def test_stores_parses_and_removes_only_parsed(conn, monkeypatch):  # noqa: F811
     from vacancy_finder.runner import run_collector
 
-    calls = []
+    no_jobs = fresh_linkedin(6)
+    no_jobs.body_html = "<p>Your application was viewed</p>"
+    inbox = FakeInbox({
+        5: ("jobalerts-noreply@linkedin.com", fresh_linkedin(5)),
+        6: ("jobs-noreply@linkedin.com", no_jobs),
+        9: ("friend@example.com", None),  # never downloaded
+    })
+    monkeypatch.setattr(email_alerts, "Inbox", inbox)
 
-    def fake_fetch(settings, known_uids, since):
-        calls.append(known_uids(77))
-        msg = linkedin_message(uid=5)
-        msg.received_at = datetime.now(UTC)
-        return 77, [] if 5 in known_uids(77) else [msg]
-
-    monkeypatch.setattr(email_alerts, "fetch_new", fake_fetch)
     run_collector(conn, EmailAlertsCollector(SETTINGS, days=30))
-    run_collector(conn, EmailAlertsCollector(SETTINGS, days=30))
-    assert calls == [set(), {5}]
-    assert count(conn, "SELECT count(*) FROM email_messages") == 1
+    assert inbox.fetched == [5, 6]
+    assert inbox.removed == [5]
+    assert sorted(inbox.messages) == [6, 9]
+    assert count(conn, "SELECT count(*) FROM email_messages") == 2
     assert count(conn, "SELECT count(*) FROM postings WHERE closed_at IS NULL") == 2
     assert conn.execute("SELECT status FROM collection_runs ORDER BY id DESC LIMIT 1").fetchone() == ("ok",)
 
-    # Once the alert is older than the window, its postings close.
+    # Next run: nothing downloaded again; the unparsed alert stays until a parser reads it.
+    run_collector(conn, EmailAlertsCollector(SETTINGS, days=30))
+    assert inbox.fetched == [5, 6]
+    assert sorted(inbox.messages) == [6, 9]
+    assert count(conn, "SELECT count(*) FROM postings WHERE closed_at IS NULL") == 2
+
+    # Once the alerts are older than the window, their postings close.
     conn.execute("UPDATE email_messages SET received_at = now() - interval '40 days'")
     conn.commit()
     run_collector(conn, EmailAlertsCollector(SETTINGS, days=30))

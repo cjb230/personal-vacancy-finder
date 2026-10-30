@@ -106,6 +106,8 @@ To check them against the live sites without touching the database: `python -m v
 
 ### Job-alert emails
 
-LinkedIn, Otta (Welcome to the Jungle) and No Fluff Jobs are covered through their job-alert emails. Send the alerts to a dedicated inbox and put its login in `.env` as `IMAP_USER` and `IMAP_PASSWORD` (see `.env.example`; the default host is Interia's `poczta.interia.pl`). The worker reads the inbox read-only, so nothing is marked read or moved, and keeps every alert in the `email_messages` table. Each run re-reads alerts from the last `EMAIL_ALERT_DAYS` (30), so parser fixes apply to old alerts, and a job closes once its newest alert is older than that.
+LinkedIn, Welcome to the Jungle (Otta) and No Fluff Jobs are covered through their job-alert emails. Send the alerts to one inbox and put its login in `.env` as `IMAP_USER` and `IMAP_PASSWORD` (see `.env.example`; the default host is iCloud's `imap.mail.me.com`, which needs an app-specific password). The worker only downloads messages from those sites' senders; the rest of the inbox is never read.
 
-To see what the parsers make of the inbox without touching the database: `set -a; . ../.env; set +a; python -m vacancy_finder.check_email` from the `worker` folder. Add `--save some/folder` to keep the messages as `.eml` files.
+Each alert is kept in the `email_messages` table. An alert that gives at least one job is then moved to `IMAP_TRASH_FOLDER` (iCloud's "Deleted Messages" by default; set it empty to delete outright). An alert that gives no jobs stays in the inbox, unread, so whatever is left there shows where the parsers need work; once a parser learns to read it, the next run picks it up and moves it. Each run re-reads alerts from the last `EMAIL_ALERT_DAYS` (30), so parser fixes apply to old alerts, and a job closes once its newest alert is older than that.
+
+To see what the parsers make of the inbox without touching the database or the inbox: `set -a; . ../.env; set +a; python -m vacancy_finder.check_email` from the `worker` folder. Add `--save some/folder` to keep the messages as `.eml` files.
