@@ -1,0 +1,198 @@
+# Second round of companies to probe, gathered 2026-10-30 from sector lists (Space Bandits,
+# StartUs Insights, Bouncewatch's Polish space list, rejobs.org and Find a Space Job listings)
+# and from sector knowledge. Not yet checked against live feeds:
+#   python -m vacancy_finder.probe --file seeds/candidates-round2.txt > probe-round2.csv
+# Same format as candidates.txt: NAME, or NAME=slug1,slug2 for slugs to try first.
+# Space and Earth observation, Poland
+Orbify
+Blue Dot Solutions
+Orbital Matter
+Liftero
+Spacive
+Hertz Systems
+Astri Polska
+Wasat
+SpaceForest
+OPEGIEKA
+Geosystems Polska
+MGGP Aero
+Baltic Orbital
+# Space, Europe
+Leanspace=leanspace
+Novaspace=novaspace
+EnduroSat=endurosat
+Kuva Space=kuvaspace
+Picterra
+SatVu=satellitevu,satvu
+AIRMO
+Marble Imaging
+Galeio
+askEarth
+OpenAtlas
+ClearSpace
+Astroscale
+Infinite Orbits
+Hemeria
+ISISPACE
+GomSpace
+LEOspace
+Aistech Space
+Spaceknow
+World from Space
+Gisat
+EOX IT Services=eox
+GeoVille
+Kayrros
+Satelligence
+Overstory
+20tree.ai=20tree
+Sylvera
+Chloris Geospatial=chloris
+Agreena
+Hummingbird Technologies
+Vortexa
+Privateer
+Ursa Space Systems=ursaspace
+LeoLabs
+Slingshot Aerospace=slingshotaerospace
+Umbra=umbra
+BlackSky
+Muon Space=muonspace
+Albedo
+Array Labs=arraylabs
+GHGSat
+SkyWatch
+HawkEye 360=hawkeye360
+Wyvern
+Floodbase
+Pachama
+# GIS and geospatial software
+CARTO
+Mapbox
+Felt
+Fused
+Wherobots
+Development Seed=developmentseed
+Element 84=element84
+Sparkgeo
+Ecopia AI=ecopia
+Nearmap
+Regrow Ag=regrow
+TomTom
+HERE Technologies=here
+# Energy and energy markets
+Axle Energy=axle-energy,axleenergy
+trawa
+Ingrid Capacity
+Granular Energy
+PowerHive
+Sympower
+enspired
+Suena
+Aurora Energy Research=auroraenergyresearch
+Electricity Maps=electricitymaps
+Habitat Energy
+Arenko
+Flexitricity
+Piclo
+Kaluza
+Zenobe
+Jedlix
+Enode
+Frank Energie
+GridBeyond
+Dexter Energy
+Volue
+Energy Web
+Cactos
+envelio
+Gridio
+Thermondo
+sonnen
+Next Kraftwerke
+Montel
+Solcast
+Lerta
+Respect Energy
+Ekoenergetyka
+Electrum
+SunRoof
+# Green tech and climate software
+Watershed
+Normative
+Sweep
+Greenly
+Plan A=plana
+Persefoni
+Patch
+Climatiq
+Cozero
+Ecosia
+Too Good To Go=toogoodtogo
+Einride
+Voi Technology=voi
+Carbon Re
+Restor
+# Health, Poland
+Cardiomatics
+Saventic Health
+StethoMe
+BrainScan
+Natu.care
+Kardiolytics
+Telemedi
+Flo Health=flohealth
+# Health, Europe
+Doctolib
+Alan
+Nabla
+Owkin
+Cera
+Huma
+Oviva
+Kaia Health
+Clue
+Tandem Health
+Lindus Health
+Natural Cycles
+Neko Health
+Unmind
+Mindler
+Visiba
+Avi Medical
+Thryve
+# Edtech
+Busuu
+GoStudent
+Sana Labs
+Kahoot
+Memrise
+Speak
+Kognity
+Labster
+Lingoda
+simpleclub
+Knowunity
+Studocu
+OpenClassrooms
+360Learning
+Sololearn
+DataCamp
+Testportal
+Speechify
+# Robotics and drones
+Sereact
+Unchained Robotics
+Franka Robotics
+Magazino
+Starship Technologies=starship
+Fernride
+ANYbotics
+Energy Robotics
+Husarion
+Mobile Industrial Robots
+Blue Ocean Robotics
+Gideon Brothers
+Wingcopter
+Dronamics
+Manna Drone Delivery=manna
