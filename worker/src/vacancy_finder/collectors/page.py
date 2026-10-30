@@ -7,6 +7,7 @@ so these postings have a title and maybe a location but no description.
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin
 
@@ -38,12 +39,12 @@ def _find_text(scope: Tag, wanted) -> str | None:
     return None
 
 
-def _card(link: Tag, pattern: re.Pattern) -> Tag:
+def _card(link: Tag, pattern: re.Pattern, key) -> Tag:
     """The largest ancestor that still holds only this one job: the job's card on the page."""
-    href = link["href"]
+    this = key(link["href"])
     card = link
     for parent in list(link.parents)[:_MAX_LEVELS]:
-        others = {a["href"] for a in parent.find_all("a", href=pattern)} - {href}
+        others = {key(a["href"]) for a in parent.find_all("a", href=pattern)} - {this}
         if others:
             break
         card = parent
@@ -62,6 +63,36 @@ def _location(card: Tag) -> str | None:
     return None
 
 
+@dataclass
+class JobLink:
+    url: str
+    title: str | None
+    location: str | None
+    card: Tag  # the element holding this job and no other
+
+
+def find_job_links(html: str, base_url: str, pattern: re.Pattern | str,
+                   key=lambda href: href.split("#")[0]) -> list[JobLink]:
+    """Each distinct job link on a page or email, with the title and location around it.
+
+    `key` says which hrefs are the same job, e.g. by job id when links carry tracking
+    parameters. Of several links to one job, the first that yields a title wins.
+    """
+    pattern = re.compile(pattern)
+    soup = BeautifulSoup(html, "html.parser")
+    found: dict[str, JobLink] = {}
+    for link in soup.find_all("a", href=pattern):
+        job = key(link["href"])
+        if job in found and found[job].title:
+            continue
+        card = _card(link, pattern, key)
+        title = _find_text(link, _is_title) or _find_text(card, _is_title) or _text(link)
+        url = urljoin(base_url, link["href"]).split("#")[0]
+        if job not in found or title:
+            found[job] = JobLink(url, title, _location(card), card)
+    return list(found.values())
+
+
 class PageCollector(AtsCollector):
     source_key = "page"
     source_name = "Company careers pages"
@@ -74,24 +105,14 @@ class PageCollector(AtsCollector):
     def parse(self, payload: str, company: TrackedCompany) -> Iterable[RawPosting]:
         if not company.link_pattern:
             raise ValueError(f"{company.name} has no link_pattern")
-        pattern = re.compile(company.link_pattern)
-        soup = BeautifulSoup(payload, "html.parser")
-        seen = set()
-        for link in soup.find_all("a", href=pattern):
-            url = urljoin(company.slug, link["href"]).split("#")[0]
-            if url in seen:
-                continue
-            seen.add(url)
-            card = _card(link, pattern)
-            title = _find_text(link, _is_title) or _find_text(card, _is_title) or _text(link)
-            location = _location(card)
+        for job in find_job_links(payload, company.slug, company.link_pattern):
             yield RawPosting(
-                external_id=url,
-                url=url,
-                title=title or "(untitled)",
+                external_id=job.url,
+                url=job.url,
+                title=job.title or "(untitled)",
                 company_name=company.name,
-                location_text=location,
-                work_mode=guess_work_mode(location, title),
+                location_text=job.location,
+                work_mode=guess_work_mode(job.location, job.title),
                 ats_kind=self.source_key,
                 ats_slug=company.slug,
             )

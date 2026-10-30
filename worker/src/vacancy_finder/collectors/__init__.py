@@ -1,5 +1,6 @@
 from .ats import ATS_COLLECTORS
 from .base import Collector
+from .email_alerts import email_collectors
 from .justjoinit import JustJoinItCollector
 from .more_ats import MORE_ATS_COLLECTORS
 from .page import PageCollector
@@ -11,4 +12,5 @@ COLLECTORS: list[Collector] = [
     PageCollector(),
     JustJoinItCollector(),
     *REMOTE_COLLECTORS,
+    *email_collectors(),  # only when IMAP_USER and IMAP_PASSWORD are set
 ]

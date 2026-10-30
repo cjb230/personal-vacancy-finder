@@ -57,7 +57,16 @@ See [docs/job-sources.md](docs/job-sources.md) for the source map and build orde
 
 ### Company careers feeds
 
-The Greenhouse, Lever (global and EU), Ashby and Workable collectors poll every company in `worker/seeds/companies.csv` that has an `ats_kind` and `ats_slug`. The file is mounted into the worker, so edits apply on the next cycle without a rebuild. Columns: `name`, `sectors` (separated by `;`), `ats_kind`, `ats_slug`, `website`, `notes`.
+The careers-feed collectors poll every company in `worker/seeds/companies.csv` that has an `ats_kind` and `ats_slug`. The file is mounted into the worker, so edits apply on the next cycle without a rebuild. Columns: `name`, `sectors` (separated by `;`), `ats_kind`, `ats_slug`, `website`, `notes`, `careers_url`, `link_pattern`.
+
+| `ats_kind` | `ats_slug` |
+|---|---|
+| `greenhouse`, `lever`, `lever-eu`, `ashby`, `workable`, `recruitee`, `traffit` | the company's slug on that system |
+| `personio` | the board's host, e.g. `liveeo-gmbh.jobs.personio.de` |
+| `teamtailor` | the careers site, e.g. `jobs.tibber.com` |
+| `page` | a plain careers page URL; `link_pattern` is a regex matching its job links' `href`s |
+
+To check new rows against the live feeds without a database: `python -m vacancy_finder.check_companies "KP Labs"` (or `--kind page`).
 
 To find a company's feed, run the probe, which tries likely slugs on each ATS and prints ready-to-paste rows:
 
@@ -85,7 +94,7 @@ Every posting gets a detected `language` ('en', 'pl' or 'de'). Adverts in Polish
 
 To check the parser against the live site: `python -m vacancy_finder.check_justjoinit 5`.
 
-No Fluff Jobs disallows automated access to both its API and its advert pages, so it will be covered through its email alerts instead.
+No Fluff Jobs disallows automated access to both its API and its advert pages, so it is covered through its email alerts instead (see below).
 
 ### Remote boards
 
@@ -94,3 +103,11 @@ Himalayas (searched with role queries, limited to jobs open to people in Poland)
 Settings: `HIMALAYAS_QUERIES` (comma-separated), `HIMALAYAS_MAX_PAGES` (20 jobs per page, per query), `ARBEITNOW_MAX_PAGES`.
 
 To check them against the live sites without touching the database: `python -m vacancy_finder.check_feeds` (or name sources, e.g. `check_feeds himalayas`).
+
+### Job-alert emails
+
+LinkedIn, Welcome to the Jungle (Otta) and No Fluff Jobs are covered through their job-alert emails. Send the alerts to one inbox and put its login in `.env` as `IMAP_USER` and `IMAP_PASSWORD` (see `.env.example`; the default host is iCloud's `imap.mail.me.com`, which needs an app-specific password). The worker only downloads messages from those sites' senders; the rest of the inbox is never read.
+
+Each alert is kept in the `email_messages` table. An alert that gives at least one job is then moved to `IMAP_TRASH_FOLDER` (iCloud's "Deleted Messages" by default; set it empty to delete outright). An alert that gives no jobs stays in the inbox, unread, so whatever is left there shows where the parsers need work; once a parser learns to read it, the next run picks it up and moves it. Each run re-reads alerts from the last `EMAIL_ALERT_DAYS` (30), so parser fixes apply to old alerts, and a job closes once its newest alert is older than that.
+
+To see what the parsers make of the inbox without touching the database or the inbox: `set -a; . ../.env; set +a; python -m vacancy_finder.check_email` from the `worker` folder. Add `--save some/folder` to keep the messages as `.eml` files.
