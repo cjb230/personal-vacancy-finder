@@ -2,7 +2,8 @@
 one interested, not interested or applied, and feedback notes (reject for, rate higher or
 lower for, score higher or lower) kept with a snapshot of the ad for tuning later. Filters
 narrow every tab to jobs first seen recently (or since a given time), above a minimum score,
-or closing soon, sorted by score, newest first or closing soonest. Marking a job applied asks
+or closing soon, sorted by score, newest first or closing soonest. A box in the top right shows
+when each source was last checked, and whether that check failed. Marking a job applied asks
 for when (default now) and the folder holding the application, both shown on the job. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
@@ -99,6 +100,16 @@ WHERE j.status = 'open' {filters}
 """.format(cases=", ".join(f"count(*) FILTER (WHERE {where})" for _, where in VIEWS.values()),
            filters=FILTERS)
 
+# Each enabled source with its latest run: when it started and how it went.
+LAST_CHECKED = """
+SELECT so.name, r.started_at AT TIME ZONE %(tz)s, r.status, r.error
+FROM sources so
+LEFT JOIN LATERAL (SELECT started_at, status, error FROM collection_runs
+                   WHERE source_id = so.id ORDER BY started_at DESC LIMIT 1) r ON true
+WHERE so.enabled
+ORDER BY so.name
+"""
+
 STYLE = """
 :root { --bg:#fff; --fg:#1d1d1f; --muted:#6e6e73; --line:#e5e5ea; --accent:#0a66c2;
         --good:#1a7f37; --warn:#9a6700; --bad:#b42318; --chip:#f2f2f7; }
@@ -108,7 +119,18 @@ STYLE = """
 * { box-sizing: border-box; }
 body { margin:0; font:15px/1.45 -apple-system, system-ui, sans-serif; background:var(--bg);
        color:var(--fg); }
-header { padding:16px 20px 8px; border-bottom:1px solid var(--line); }
+header { padding:16px 20px 8px; border-bottom:1px solid var(--line); position:relative; }
+.checked { float:right; margin:0 0 8px 16px; position:relative; font-size:13px; }
+.checked summary { cursor:pointer; color:var(--muted); border:1px solid var(--line);
+  border-radius:8px; padding:3px 10px; list-style:none; }
+.checked summary::after { content:" ▾"; } .checked[open] summary::after { content:" ▴"; }
+.checked .failed { color:var(--bad); font-weight:600; }
+.checked table { position:absolute; right:0; top:calc(100% + 4px); z-index:10; background:var(--bg);
+  border:1px solid var(--line); border-radius:8px; padding:6px 10px; border-collapse:separate;
+  box-shadow:0 4px 16px rgba(0,0,0,.12); font-size:12px; color:var(--muted);
+  width:max-content; max-width:min(560px, calc(100vw - 32px)); }
+.checked td { padding:1px 0 1px 12px; white-space:nowrap; }
+.checked td:first-child { padding-left:0; white-space:normal; }
 h1 { font-size:20px; margin:0 0 10px; }
 nav a { display:inline-block; margin:0 6px 8px 0; padding:4px 10px; border-radius:14px;
         background:var(--chip); color:var(--fg); text-decoration:none; font-size:14px; }
@@ -175,6 +197,15 @@ function openApply(id) {
   }
   form.elements.application_dir.focus();
 }
+// The "Last checked" box stays open or closed across reloads, as last left.
+document.addEventListener("DOMContentLoaded", () => {
+  const box = document.querySelector("details.checked");
+  if (!box) return;
+  try { box.open = localStorage.getItem("checkedOpen") === "1"; } catch (e) {}
+  box.addEventListener("toggle", () => {
+    try { localStorage.setItem("checkedOpen", box.open ? "1" : "0"); } catch (e) {}
+  });
+});
 """
 
 
@@ -210,6 +241,7 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
                               "closes": closes, "sort": "" if sort == "score" else sort}.items() if v}
     with connect() as conn:
         counts = conn.execute(COUNTS, filters).fetchone()
+        checked = conn.execute(LAST_CHECKED, {"tz": DISPLAY_TZ}).fetchall()
         rows = conn.execute(
             QUERY.format(where=where, filters=FILTERS, order=SORTS[sort][1]),
             {"q": q, "like": f"%{q}%", "limit": PAGE_SIZE, "offset": page * PAGE_SIZE, **filters},
@@ -264,11 +296,40 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vacancy finder</title><style>{STYLE}</style><script>{SCRIPT}</script></head><body>
-<header><h1>Vacancy finder</h1><nav>{tabs}
+<header>{render_checked(checked, now)}<h1>Vacancy finder</h1><nav>{tabs}
 <form class="search" method="get"><input type="hidden" name="view" value="{esc(view)}">
 {hidden(keep)}<input name="q" value="{esc(q)}" placeholder="Search title or company"></form></nav>
 {render_filters(view, q, seen, since, min_score, sort, closes)}</header>
 <main><h2 style="font-size:16px">{esc(title)}</h2>{body}{pager}</main></body></html>"""
+
+
+def render_checked(rows: list[tuple], now: datetime) -> str:
+    """The "Last checked" box: a summary (the latest check, and how many sources' last check
+    failed) that opens a list of each source's latest run start, as a DISPLAY_TZ local time
+    (with the date unless it was today), marked if that run failed or is still going."""
+    if not rows:
+        return ""
+    today = now.date()
+
+    def stamp(at: datetime) -> str:
+        return f"{at:%H:%M}" if at.date() == today else f"{at:%d %b %H:%M}"
+
+    lines = []
+    for name, started, status, error in rows:
+        if started is None:
+            when, note = "never", ""
+        else:
+            when = stamp(started)
+            note = {"failed": f'<span class="failed" title="{esc(error)}">failed</span>',
+                    "running": "running"}.get(status, "")
+        lines.append(f"<tr><td>{esc(name)}</td><td>{when}</td><td>{note}</td></tr>")
+    times = [started for _, started, _, _ in rows if started is not None]
+    failed = sum(status == "failed" for _, _, status, _ in rows)
+    summary = f"Last checked {stamp(max(times))}" if times else "Not checked yet"
+    if failed:
+        summary += f' · <span class="failed">{failed} failed</span>'
+    return (f'<details class="checked"><summary>{summary}</summary>'
+            f'<table>{"".join(lines)}</table></details>')
 
 
 def render_closing(closes_at: datetime | None, is_deadline: bool, passed: bool) -> str:
