@@ -1,6 +1,7 @@
 """Scoring stored jobs and the results page, against a real database."""
 
 import os
+import re
 from datetime import datetime
 
 import pytest
@@ -173,3 +174,24 @@ def test_applied_records_when_and_where(conn, monkeypatch):  # noqa: F811
     web.save_review(job_id, "applied")
     assert "no folder given" in web.render("applied", "", 0)
     assert conn.execute("SELECT applied_at > now() - interval '1 minute' FROM job_reviews").fetchone()[0]
+
+
+def test_last_checked_box(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    monkeypatch.setattr(web, "DISPLAY_TZ", "UTC")
+    ok = ensure_source(conn, "ok", "Good board", "board")
+    bad = ensure_source(conn, "bad", "Broken board", "board")
+    ensure_source(conn, "new", "New board", "board")
+    conn.execute("INSERT INTO collection_runs (source_id, started_at, status) VALUES "
+                 "(%s, '2026-10-30 08:00+00', 'ok'), (%s, '2026-10-30 09:15+00', 'ok')", (ok, ok))
+    conn.execute("INSERT INTO collection_runs (source_id, started_at, status, error) VALUES "
+                 "(%s, now(), 'failed', 'timed out <x>')", (bad,))
+    conn.commit()
+
+    page = web.render("match", "", 0)
+    box = page[page.index('<details class="checked">'):page.index("</details>")]
+    assert re.search(r"<summary>Last checked \d\d:\d\d · <span class=\"failed\">1 failed", box)
+    assert "<td>Good board</td><td>30 Oct 09:15</td>" in box  # latest run, with date as not today
+    assert re.search(r"<td>Broken board</td><td>\d\d:\d\d</td>", box)  # today: time only
+    assert 'class="failed" title="timed out &lt;x&gt;"' in box
+    assert "<td>New board</td><td>never</td>" in box
