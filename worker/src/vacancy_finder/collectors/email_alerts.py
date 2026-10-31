@@ -218,6 +218,7 @@ def _quote(folder: str) -> str:
 @dataclass(frozen=True)
 class AlertParser:
     platform: str
+    name: str  # who sent the alert, as shown on the results page
     sender: re.Pattern  # matched against the From address
     link: re.Pattern  # job links; group 1 is the platform's job id
     canonical: str  # job URL from the id, without tracking parameters
@@ -245,7 +246,8 @@ class AlertParser:
                 location_text=location,
                 work_mode=work_mode(title, location),
                 posted_at=msg.received_at,
-                raw={"platform": self.platform, "subject": msg.subject,
+                raw={"platform": self.platform, "alert_from": self.name,
+                     "subject": msg.subject,
                      "card_text": card_lines(job)[:12]},
             )
 
@@ -311,16 +313,16 @@ def clean_text(text: str) -> str | None:
 
 
 PARSERS = [
-    AlertParser("linkedin", re.compile(r"linkedin\.com$"),
+    AlertParser("linkedin", "LinkedIn", re.compile(r"linkedin\.com$"),
                 re.compile(r"linkedin\.com/(?:comm/)?jobs/view/(\d+)"),
                 "https://www.linkedin.com/jobs/view/{id}/", linkedin_card),
     # Welcome to the Jungle links are either app.welcometothejungle.com/jobs/{id} (the old Otta
     # app) or www.welcometothejungle.com/{lang}/companies/{company}/jobs/{slug}.
-    AlertParser("wttj", re.compile(r"(otta\.com|welcometothejungle\.com)$"),
+    AlertParser("wttj", "Welcome to the Jungle", re.compile(r"(otta\.com|welcometothejungle\.com)$"),
                 re.compile(r"(?:otta\.com|welcometothejungle\.com)/"
                            r"((?:[a-z]{2}/)?(?:companies/[\w-]+/)?jobs/[\w-]+)"),
                 "https://www.welcometothejungle.com/{id}"),
-    AlertParser("nofluffjobs", re.compile(r"nofluffjobs\.com$"),
+    AlertParser("nofluffjobs", "No Fluff Jobs", re.compile(r"nofluffjobs\.com$"),
                 re.compile(r"nofluffjobs\.com/(?:[a-z]{2}/)?job/([a-z0-9-]+)"),
                 "https://nofluffjobs.com/job/{id}"),
 ]
@@ -346,7 +348,7 @@ def parse_message(msg: StoredMessage) -> list[RawPosting]:
 
 class EmailAlertsCollector:
     source_key = "email_alerts"
-    source_name = "Job-alert emails (LinkedIn, Welcome to the Jungle, No Fluff Jobs)"
+    source_name = "Job-alert emails"
     source_kind = "email"
 
     def __init__(self, settings: ImapSettings, days: int | None = None) -> None:
