@@ -173,3 +173,18 @@ def test_applied_records_when_and_where(conn, monkeypatch):  # noqa: F811
     web.save_review(job_id, "applied")
     assert "no folder given" in web.render("applied", "", 0)
     assert conn.execute("SELECT applied_at > now() - interval '1 minute' FROM job_reviews").fetchone()[0]
+
+
+def test_email_jobs_name_the_alert_sender(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    source = ensure_source(conn, "email_alerts", "Job-alert emails", "email")
+    upsert_posting(conn, source, RawPosting(
+        external_id="linkedin:1", url="https://www.linkedin.com/jobs/view/1/",
+        title="Engineering Manager", company_name="Orbit & Co", location_text="Remote, Europe",
+        work_mode="remote", description="Python and PostgreSQL for satellite imagery.",
+        raw={"platform": "linkedin", "alert_from": "LinkedIn"}))
+    conn.commit()
+    score_all(conn)
+    page = "".join(web.render(view, "", 0) for view in web.VIEWS)
+    assert "LinkedIn alert" in page and "Orbit &amp; Co" in page
+    assert "Job-alert emails" not in page

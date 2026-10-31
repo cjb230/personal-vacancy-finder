@@ -48,6 +48,7 @@ def test_linkedin_alert():
     assert first.location_text == "Warsaw, Mazowieckie, Poland (Hybrid)"
     assert first.work_mode == "hybrid"
     assert first.raw["platform"] == "linkedin"
+    assert first.raw["alert_from"] == "LinkedIn"
     assert (second.title, second.company_name) == ("Staff Python Engineer", "Beta Orbital")
     assert second.location_text == "European Union (Remote)"
     assert second.work_mode == "remote"
