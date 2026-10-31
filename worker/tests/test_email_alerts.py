@@ -1,6 +1,7 @@
 """Email alerts: message decoding and the draft LinkedIn parser, plus storage against a database."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -121,6 +122,22 @@ def test_wttj_links():
     assert (first.title, first.company_name, first.location_text) == ("Engineering Manager", "Acme Space", "Warsaw, Poland")
     assert second.url == "https://www.welcometothejungle.com/jobs/AbC123xy"
     assert second.company_name == "Beta Orbital"
+
+
+def test_nofluffjobs_alert_behind_click_tracker():
+    """No Fluff Jobs wraps each link in mail-link.nofluffjobs.com/click/... with the real URL
+    base64-encoded; the layout matches the real alerts of October 2026."""
+    msg = to_stored((FIXTURES / "nofluffjobs_alert.eml").read_bytes(), 13)
+    first, second = parse_message(msg)
+    assert first.external_id == "nofluffjobs:squad-lead-engineering-manager-acme-space-warsaw"
+    assert first.url == "https://nofluffjobs.com/job/squad-lead-engineering-manager-acme-space-warsaw"
+    assert (first.title, first.company_name) == ("Squad Lead (Engineering Manager)", "Acme Space")
+    assert first.location_text == "Warsaw and also remotely"
+    assert (first.salary_min, first.salary_max, first.salary_currency, first.salary_period) == (
+        Decimal(25000), Decimal(32000), "PLN", "month")
+    assert (second.title, second.company_name) == ("People Manager", "Beta Orbital")
+    assert (second.location_text, second.work_mode) == ("Remote", "remote")
+    assert second.salary_min is None
 
 
 class FakeImap:

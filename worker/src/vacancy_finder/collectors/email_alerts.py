@@ -18,6 +18,8 @@ The parsers find job links by URL and read the title and the company / location 
 around each link.
 """
 
+import base64
+import binascii
 import email
 import email.policy
 import html
@@ -28,6 +30,7 @@ import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
 
@@ -225,11 +228,14 @@ class AlertParser:
     # (title, company, location) from a job's card, for senders whose layout we know;
     # None for any part it can't find, which then falls back to the generic guess.
     card_fields: Callable[[JobLink], tuple[str | None, str | None, str | None]] | None = None
+    # (min, max, currency) of the monthly pay on a job's card, for senders that show it.
+    card_salary: Callable[[JobLink], tuple[Decimal, Decimal, str] | None] | None = None
 
     def postings(self, msg: StoredMessage) -> Iterator[RawPosting]:
         if not msg.body_html:
             return
-        for job in find_job_links(msg.body_html, "https://example.invalid/", self.link,
+        body = unwrap_tracking_links(msg.body_html)
+        for job in find_job_links(body, "https://example.invalid/", self.link,
                                   key=lambda href: self.link.search(href).group(1)):
             job_id = self.link.search(job.url).group(1)
             title, company, location = (
@@ -238,6 +244,7 @@ class AlertParser:
             if not (title and company):
                 company, location = company_and_location(job)
                 title = job.title
+            salary = self.card_salary(job) if self.card_salary else None
             yield RawPosting(
                 external_id=f"{self.platform}:{job_id}",
                 url=self.canonical.format(id=job_id),
@@ -245,6 +252,8 @@ class AlertParser:
                 company_name=company or "(unknown company)",
                 location_text=location,
                 work_mode=work_mode(title, location),
+                **(dict(salary_min=salary[0], salary_max=salary[1], salary_currency=salary[2],
+                        salary_period="month") if salary else {}),
                 posted_at=msg.received_at,
                 raw={"platform": self.platform, "alert_from": self.name,
                      "subject": msg.subject,
@@ -303,6 +312,50 @@ def linkedin_card(job: JobLink) -> tuple[str | None, str | None, str | None]:
     return title, company or None, location or None
 
 
+def nofluffjobs_card(job: JobLink) -> tuple[str | None, str | None, str | None]:
+    """No Fluff Jobs cards are four lines: title, pay ("25 000 - 32 000 PLN", or "Check
+    Salary Match"), company, and where ("in Warszawa and also remotely", "available
+    remotely")."""
+    lines = card_lines(job)
+    if len(lines) < 4:
+        return None, None, None
+    title, _, company, where = lines[:4]
+    location = re.sub(r"^in\s+", "", where)
+    if location.lower() == "available remotely":
+        location = "Remote"
+    return title, company, location
+
+
+_NFJ_PAY = re.compile(r"^([\d\s]+?)\s*(?:-\s*([\d\s]+?))?\s*([A-Z]{3})$")
+
+
+def nofluffjobs_salary(job: JobLink) -> tuple[Decimal, Decimal, str] | None:
+    lines = card_lines(job)
+    if len(lines) < 2 or not (m := _NFJ_PAY.match(lines[1])):
+        return None
+    low = Decimal(m.group(1).replace(" ", ""))
+    high = Decimal(m.group(2).replace(" ", "")) if m.group(2) else low
+    return low, high, m.group(3)
+
+
+# Alert senders wrap every link in a click tracker that carries the real URL base64-encoded,
+# e.g. https://mail-link.nofluffjobs.com/click/{campaign}/{base64 url}/{signature}.
+_TRACKED_HREF = re.compile(
+    r'href="https://mail-link\.nofluffjobs\.com/click/[^/"]+/([A-Za-z0-9_-]+)[^"]*"'
+)
+
+
+def unwrap_tracking_links(body_html: str) -> str:
+    def real_href(m: re.Match) -> str:
+        encoded = m.group(1) + "=" * (-len(m.group(1)) % 4)
+        try:
+            url = base64.urlsafe_b64decode(encoded).decode()
+        except (binascii.Error, UnicodeDecodeError):
+            return m.group(0)
+        return f'href="{html.escape(url)}"' if url.startswith("http") else m.group(0)
+    return _TRACKED_HREF.sub(real_href, body_html)
+
+
 def clean_text(text: str) -> str | None:
     # LinkedIn escapes some text more than once ("&amp;amp;..."), so unescape until stable.
     for _ in range(3):
@@ -324,7 +377,7 @@ PARSERS = [
                 "https://www.welcometothejungle.com/{id}"),
     AlertParser("nofluffjobs", "No Fluff Jobs", re.compile(r"nofluffjobs\.com$"),
                 re.compile(r"nofluffjobs\.com/(?:[a-z]{2}/)?job/([a-z0-9-]+)"),
-                "https://nofluffjobs.com/job/{id}"),
+                "https://nofluffjobs.com/job/{id}", nofluffjobs_card, nofluffjobs_salary),
 ]
 
 
