@@ -41,7 +41,7 @@ services:
       IMAP_USER: ${IMAP_USER:-}
       IMAP_PASSWORD: ${IMAP_PASSWORD:-}
       IMAP_FOLDER: ${IMAP_FOLDER:-INBOX}
-      IMAP_TRASH_FOLDER: ${IMAP_TRASH_FOLDER:-Deleted Messages}
+      IMAP_PARSED_FOLDER: ${IMAP_PARSED_FOLDER:-Parsed job alerts}
       EMAIL_ALERT_DAYS: ${EMAIL_ALERT_DAYS:-30}
       WEB_HOST: 0.0.0.0  # inside the container; published on 127.0.0.1 only, below
     ports:
