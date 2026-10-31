@@ -5,13 +5,14 @@ Each run stores every new alert (from a sender with a parser) in email_messages,
 alerts of the last EMAIL_ALERT_DAYS, so parser fixes apply to old alerts too. A posting stays
 open while its newest alert is inside that window and closes after.
 
-Messages that gave at least one posting are moved out of the inbox to IMAP_TRASH_FOLDER (or
-deleted outright if that is empty); the stored copy stays in the database. Anything else
-stays in the inbox, unread, so what is left there shows where the parsers fall short.
+Messages that gave at least one posting are marked read and moved out of the inbox to
+IMAP_PARSED_FOLDER, which is created if missing; nothing is deleted, and the stored copy stays
+in the database. Anything else stays in the inbox, unread, so what is left there shows where
+the parsers fall short.
 
 Settings: IMAP_USER and IMAP_PASSWORD (required, or the collector is off), IMAP_HOST
-(default imap.mail.me.com, iCloud), IMAP_PORT (993), IMAP_FOLDER (INBOX), IMAP_TRASH_FOLDER
-("Deleted Messages", iCloud's bin), EMAIL_ALERT_DAYS (30).
+(default imap.mail.me.com, iCloud), IMAP_PORT (993), IMAP_FOLDER (INBOX), IMAP_PARSED_FOLDER
+("Parsed job alerts"), EMAIL_ALERT_DAYS (30).
 
 The parsers find job links by URL and read the title and the company / location lines
 around each link.
@@ -39,6 +40,9 @@ from .page import JobLink, find_job_links
 log = logging.getLogger(__name__)
 
 
+DEFAULT_PARSED_FOLDER = "Parsed job alerts"
+
+
 @dataclass(frozen=True)
 class ImapSettings:
     host: str
@@ -46,7 +50,7 @@ class ImapSettings:
     user: str
     password: str
     folder: str
-    trash_folder: str = "Deleted Messages"  # empty: delete outright
+    parsed_folder: str = DEFAULT_PARSED_FOLDER
 
     @property
     def mailbox(self) -> str:
@@ -63,7 +67,7 @@ def imap_settings_from_env() -> ImapSettings | None:
         user=user,
         password=password,
         folder=os.environ.get("IMAP_FOLDER") or "INBOX",
-        trash_folder=os.environ.get("IMAP_TRASH_FOLDER", "Deleted Messages"),
+        parsed_folder=os.environ.get("IMAP_PARSED_FOLDER") or DEFAULT_PARSED_FOLDER,
     )
 
 
@@ -162,28 +166,42 @@ class Inbox:
         raw = next((p[1] for p in parts if isinstance(p, tuple)), None)
         return to_stored(raw, uid) if raw else None
 
-    def remove(self, uids: list[int]) -> None:
-        """Moves the messages to the trash folder, or deletes them if there is none."""
+    def file_parsed(self, uids: list[int]) -> None:
+        """Marks the messages read and moves them to the parsed folder, creating it if needed."""
         if not uids:
             return
         if not self.writable:
             raise RuntimeError("inbox was opened read-only")
         uid_set = ",".join(map(str, uids))
-        trash = self.settings.trash_folder
-        if trash and b"MOVE" in self._capabilities():
-            status, data = self.imap.uid("MOVE", uid_set, _quote(trash))
+        target = self.settings.parsed_folder
+        self.ensure_folder(target)
+        # Flags travel with the message, so mark read first and the moved copy is read too.
+        status, data = self.imap.uid("STORE", uid_set, "+FLAGS.SILENT", r"(\Seen)")
+        if status != "OK":
+            raise RuntimeError(f"cannot mark messages read: {data}")
+        if b"MOVE" in self._capabilities():
+            status, data = self.imap.uid("MOVE", uid_set, _quote(target))
             if status != "OK":
-                raise RuntimeError(f"cannot move messages to {trash!r}: {data}")
+                raise RuntimeError(f"cannot move messages to {target!r}: {data}")
             return
-        if trash:
-            status, data = self.imap.uid("COPY", uid_set, _quote(trash))
-            if status != "OK":
-                raise RuntimeError(f"cannot copy messages to {trash!r}: {data}")
+        status, data = self.imap.uid("COPY", uid_set, _quote(target))
+        if status != "OK":
+            raise RuntimeError(f"cannot copy messages to {target!r}: {data}")
         self.imap.uid("STORE", uid_set, "+FLAGS.SILENT", r"(\Deleted)")
         if b"UIDPLUS" in self._capabilities():
             self.imap.uid("EXPUNGE", uid_set)  # only these, not others marked deleted
         else:
             self.imap.expunge()
+
+    def ensure_folder(self, folder: str) -> None:
+        """Creates the folder (and subscribes to it, so mail apps show it) unless it exists."""
+        status, data = self.imap.list('""', _quote(folder))
+        if status == "OK" and any(data):
+            return
+        status, data = self.imap.create(_quote(folder))
+        if status != "OK" and b"ALREADYEXISTS" not in b" ".join(d for d in data if d).upper():
+            raise RuntimeError(f"cannot create folder {folder!r}: {data}")
+        self.imap.subscribe(_quote(folder))
 
     def _capabilities(self) -> set[bytes]:
         _, data = self.imap.capability()
@@ -376,9 +394,9 @@ class EmailAlertsCollector:
             # Everything still in the inbox that now parses goes, including older messages
             # that an improved parser has learned to read.
             parsed = [uid for uid in inbox.uids() if uid in stored and parse_message(stored[uid])]
-            inbox.remove(parsed)
-            log.info("email_alerts: %d new messages, %d parsed and removed from %s",
-                     len(new), len(parsed), self.settings.folder)
+            inbox.file_parsed(parsed)
+            log.info("email_alerts: %d new messages, %d parsed and moved from %s to %s",
+                     len(new), len(parsed), self.settings.folder, self.settings.parsed_folder)
 
         # Oldest first, so each posting ends up with the details of its latest mention.
         rows = conn.execute(
