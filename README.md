@@ -96,6 +96,10 @@ To check the parser against the live site: `python -m vacancy_finder.check_justj
 
 No Fluff Jobs disallows automated access to both its API and its advert pages, so it is covered through its email alerts instead (see below).
 
+### Space-Careers
+
+space-careers.com has no feed or API, but its sitemap lists every live advert (about 200) with a last-changed date. The collector reads the sitemap each run and opens only adverts that are new or changed, waiting `SPACECAREERS_DELAY_SECONDS` (2) between pages and opening at most `SPACECAREERS_MAX_PAGES` (300) per run. Adverts give title, company, location, workplace and description, but no pay or closing date. Its alert emails aren't needed, so they are left in the inbox.
+
 ### Remote boards
 
 Himalayas (searched with role queries, limited to jobs open to people in Poland), Remote OK, We Work Remotely (programming and DevOps feeds), Arbeitnow (remote jobs and jobs in Poland only) and the Hacker News "Who is hiring?" threads (this month and last, re-read every run so new comments are picked up). These feeds show only recent jobs, so a posting is closed once it has been missing for a couple of weeks (45 days for Hacker News) rather than on its first absence. Remotive is left out: its robots.txt disallows the API.
@@ -106,7 +110,7 @@ To check them against the live sites without touching the database: `python -m v
 
 ### Job-alert emails
 
-LinkedIn, Welcome to the Jungle (Otta) and No Fluff Jobs are covered through their job-alert emails. Send the alerts to one inbox and put its login in `.env` as `IMAP_USER` and `IMAP_PASSWORD` (see `.env.example`; the default host is iCloud's `imap.mail.me.com`, which needs an app-specific password). The worker only downloads messages from those sites' senders; the rest of the inbox is never read.
+LinkedIn, Welcome to the Jungle (Otta) and No Fluff Jobs are covered through their job-alert emails. No Fluff Jobs hides each link behind a click tracker with the real URL base64-encoded; the parser decodes it. Send the alerts to one inbox and put its login in `.env` as `IMAP_USER` and `IMAP_PASSWORD` (see `.env.example`; the default host is iCloud's `imap.mail.me.com`, which needs an app-specific password). The worker only downloads messages from those sites' senders; the rest of the inbox is never read.
 
 Each alert is kept in the `email_messages` table. An alert that gives at least one job is then marked read and moved to `IMAP_PARSED_FOLDER` ("Parsed job alerts" by default), which the worker creates if it is missing; nothing is deleted. An alert that gives no jobs stays in the inbox, unread, so whatever is left there shows where the parsers need work; once a parser learns to read it, the next run picks it up and moves it. Each run re-reads alerts from the last `EMAIL_ALERT_DAYS` (30), so parser fixes apply to old alerts, and a job closes once its newest alert is older than that.
 
