@@ -78,7 +78,9 @@ SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.dec
         ORDER BY p.last_seen_at DESC LIMIT 1) AS url,
        (SELECT string_agg(DISTINCT p.location_text, ' | ') FROM postings p
         WHERE p.job_id = j.id AND p.closed_at IS NULL) AS locations,
-       (SELECT string_agg(DISTINCT so.name, ', ') FROM postings p JOIN sources so ON so.id = p.source_id
+       -- An email alert is labelled by who sent it ("LinkedIn alert"), not as the inbox.
+       (SELECT string_agg(DISTINCT COALESCE(p.raw->>'alert_from' || ' alert', so.name), ', ')
+        FROM postings p JOIN sources so ON so.id = p.source_id
         WHERE p.job_id = j.id AND p.closed_at IS NULL) AS sources
 FROM jobs j
 JOIN job_scores s ON s.job_id = j.id

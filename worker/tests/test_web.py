@@ -195,3 +195,19 @@ def test_last_checked_box(conn, monkeypatch):  # noqa: F811
     assert re.search(r"<td>Broken board</td><td>\d\d:\d\d</td>", box)  # today: time only
     assert 'class="failed" title="timed out &lt;x&gt;"' in box
     assert "<td>New board</td><td>never</td>" in box
+
+
+def test_email_jobs_name_the_alert_sender(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    source = ensure_source(conn, "email_alerts", "Job-alert emails", "email")
+    upsert_posting(conn, source, RawPosting(
+        external_id="linkedin:1", url="https://www.linkedin.com/jobs/view/1/",
+        title="Engineering Manager", company_name="Orbit & Co", location_text="Remote, Europe",
+        work_mode="remote", description="Python and PostgreSQL for satellite imagery.",
+        raw={"platform": "linkedin", "alert_from": "LinkedIn"}))
+    conn.commit()
+    score_all(conn)
+    # The job list only: the "Last checked" box names the source itself.
+    page = "".join(web.render(view, "", 0).split("<main>")[1] for view in web.VIEWS)
+    assert "LinkedIn alert" in page and "Orbit &amp; Co" in page
+    assert "Job-alert emails" not in page

@@ -37,7 +37,7 @@ def main() -> None:
             if msg is None:
                 continue
             postings = parse_message(msg)
-            verdict = "would be removed" if postings else "would stay in the inbox"
+            verdict = f"would move to {settings.parsed_folder!r}" if postings else "would stay in the inbox"
             print(f"\n[{uid}] {msg.received_at:%Y-%m-%d %H:%M} {msg.from_address} | "
                   f"{msg.subject!r} | {parser_for(msg.from_address).platform} | "
                   f"{len(postings)} jobs, {verdict}")

@@ -48,6 +48,7 @@ def test_linkedin_alert():
     assert first.location_text == "Warsaw, Mazowieckie, Poland (Hybrid)"
     assert first.work_mode == "hybrid"
     assert first.raw["platform"] == "linkedin"
+    assert first.raw["alert_from"] == "LinkedIn"
     assert (second.title, second.company_name) == ("Staff Python Engineer", "Beta Orbital")
     assert second.location_text == "European Union (Remote)"
     assert second.work_mode == "remote"
@@ -100,10 +101,10 @@ def test_off_without_credentials(monkeypatch):
     assert email_alerts.email_collectors() == []
     monkeypatch.setenv("IMAP_USER", "me@icloud.com")
     monkeypatch.setenv("IMAP_PASSWORD", "x")
-    monkeypatch.delenv("IMAP_TRASH_FOLDER", raising=False)
+    monkeypatch.delenv("IMAP_PARSED_FOLDER", raising=False)
     (collector,) = email_alerts.email_collectors()
     assert collector.settings.host == "imap.mail.me.com"
-    assert collector.settings.trash_folder == "Deleted Messages"
+    assert collector.settings.parsed_folder == "Parsed job alerts"
 
 
 def test_wttj_links():
@@ -123,12 +124,25 @@ def test_wttj_links():
 
 
 class FakeImap:
-    def __init__(self, capabilities):
+    def __init__(self, capabilities, folders=()):
         self.caps = capabilities
+        self.folders = set(folders)
         self.calls = []
 
     def capability(self):
         return "OK", [self.caps]
+
+    def list(self, ref, pattern):
+        return "OK", [b'(\\HasNoChildren) "/" ' + pattern.encode()] if pattern in self.folders else [None]
+
+    def create(self, folder):
+        self.calls.append(("CREATE", folder))
+        self.folders.add(folder)
+        return "OK", [b""]
+
+    def subscribe(self, folder):
+        self.calls.append(("SUBSCRIBE", folder))
+        return "OK", [b""]
 
     def uid(self, *args):
         self.calls.append(args)
@@ -139,31 +153,47 @@ class FakeImap:
         return "OK", [b""]
 
 
+READ = ("STORE", "3,7", "+FLAGS.SILENT", r"(\Seen)")
+FOLDER = '"Parsed job alerts"'
+
+
 @pytest.mark.parametrize(
-    ("caps", "trash", "expected"),
+    ("caps", "expected"),
     [
-        (b"IMAP4rev1 MOVE UIDPLUS", "Deleted Messages", [("MOVE", "3,7", '"Deleted Messages"')]),
-        (b"IMAP4rev1 UIDPLUS", "Deleted Messages", [
-            ("COPY", "3,7", '"Deleted Messages"'),
+        (b"IMAP4rev1 MOVE UIDPLUS", [READ, ("MOVE", "3,7", FOLDER)]),
+        (b"IMAP4rev1 UIDPLUS", [
+            READ,
+            ("COPY", "3,7", FOLDER),
             ("STORE", "3,7", "+FLAGS.SILENT", r"(\Deleted)"),
             ("EXPUNGE", "3,7"),
         ]),
-        (b"IMAP4rev1 MOVE", "", [("STORE", "3,7", "+FLAGS.SILENT", r"(\Deleted)"), ("EXPUNGE-ALL",)]),
+        (b"IMAP4rev1", [
+            READ,
+            ("COPY", "3,7", FOLDER),
+            ("STORE", "3,7", "+FLAGS.SILENT", r"(\Deleted)"),
+            ("EXPUNGE-ALL",),
+        ]),
     ],
 )
-def test_remove_moves_to_trash_or_deletes(caps, trash, expected):
-    settings = ImapSettings("imap.example", 993, "me@example", "pw", "INBOX", trash)
-    inbox = email_alerts.Inbox(settings, writable=True)
-    inbox.imap = FakeImap(caps)
-    inbox.remove([3, 7])
+def test_parsed_are_marked_read_and_moved(caps, expected):
+    inbox = email_alerts.Inbox(SETTINGS, writable=True)
+    inbox.imap = FakeImap(caps, folders={FOLDER})
+    inbox.file_parsed([3, 7])
     assert inbox.imap.calls == expected
+
+
+def test_parsed_folder_created_when_missing():
+    inbox = email_alerts.Inbox(SETTINGS, writable=True)
+    inbox.imap = FakeImap(b"IMAP4rev1 MOVE")
+    inbox.file_parsed([3, 7])
+    assert inbox.imap.calls == [("CREATE", FOLDER), ("SUBSCRIBE", FOLDER), READ, ("MOVE", "3,7", FOLDER)]
 
 
 def test_read_only_inbox_never_removes():
     inbox = email_alerts.Inbox(SETTINGS)
     inbox.imap = FakeImap(b"MOVE")
     with pytest.raises(RuntimeError):
-        inbox.remove([1])
+        inbox.file_parsed([1])
 
 
 from .test_store import DB_URL, conn, count  # noqa: E402,F401  (conn is a fixture)
@@ -198,7 +228,7 @@ class FakeInbox:
         self.fetched.append(uid)
         return self.messages[uid][1]
 
-    def remove(self, uids):
+    def file_parsed(self, uids):
         self.removed.extend(uids)
         for uid in uids:
             del self.messages[uid]
