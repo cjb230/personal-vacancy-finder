@@ -2,14 +2,14 @@
 
 import os
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
 from vacancy_finder import web
 from vacancy_finder.matching import score_all
 from vacancy_finder.models import RawPosting
-from vacancy_finder.store import ensure_source, upsert_posting
+from vacancy_finder.store import close_unseen, confirm_tracked_jobs, ensure_source, upsert_posting
 
 from .test_store import DB_URL, conn, count  # noqa: F401  (conn is a fixture)
 
@@ -211,6 +211,44 @@ def test_email_jobs_name_the_alert_sender(conn, monkeypatch):  # noqa: F811
     page = "".join(web.render(view, "", 0).split("<main>")[1] for view in web.VIEWS)
     assert "LinkedIn alert" in page and "Orbit &amp; Co" in page
     assert "Job-alert emails" not in page
+
+
+def test_tracked_jobs_show_confirmation_and_missed_tab(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    board = ensure_source(conn, "test", "Test board", "board")
+    email = ensure_source(conn, "email_alerts", "Job-alert emails", "email")
+    ad = dict(company_name="Orbit", location_text="Remote, Europe", work_mode="remote",
+              description="Python and PostgreSQL for satellite imagery. You will lead the team.")
+    upsert_posting(conn, board, RawPosting(external_id="1", url="https://x.example/1",
+                                           title="Engineering Manager", **ad))
+    upsert_posting(conn, board, RawPosting(external_id="2", url="https://x.example/2",
+                                           title="Director of Engineering", **ad))
+    upsert_posting(conn, email, RawPosting(external_id="e3", url="https://x.example/3",
+                                           title="Staff Python Engineer", **ad))
+    conn.commit()
+    score_all(conn)
+    ids = dict(conn.execute("SELECT title, id FROM jobs").fetchall())
+
+    page = web.render("match", "", 0)
+    assert re.search(r"confirmed \d\d \w{3} \d\d:\d\d", page)
+    assert "email alerts only, last seen" in page
+
+    web.save_review(ids["Engineering Manager"], "interested")
+    web.save_review(ids["Director of Engineering"], "applied")
+    # The board stops listing both of its jobs.
+    conn.execute("UPDATE postings SET last_seen_at = now() - interval '1 hour' WHERE source_id = %s",
+                 (board,))
+    close_unseen(conn, board, datetime.now(UTC))
+    confirm_tracked_jobs(conn)
+    conn.commit()
+
+    page = web.render("missed", "", 0)
+    assert "Missed (1)" in page and "Interested (0)" in page and "Applied (1)" in page
+    main = page.split("<main>")[1]
+    assert "Engineering Manager" in main and "advert gone" in main
+    assert 'href="https://x.example/1"' in main  # still links to the last advert
+    applied = web.render("applied", "", 0).split("<main>")[1]
+    assert "Director of Engineering" in applied and "advert gone" in applied
 
 
 def test_role_toggles_hide_staff_manager_and_director(conn, monkeypatch):  # noqa: F811

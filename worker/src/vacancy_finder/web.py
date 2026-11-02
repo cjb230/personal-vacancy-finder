@@ -5,7 +5,9 @@ narrow every tab to jobs first seen recently (or since a given time), above a mi
 or closing soon, sorted by score, newest first or closing soonest. Three toggles show or hide
 staff, manager and director-level roles (all shown by default). A box in the top right shows
 when each source was last checked, and whether that check failed. Marking a job applied asks
-for when (default now) and the folder holding the application, both shown on the job. Served by the worker on WEB_PORT (8080), which
+for when (default now) and the folder holding the application, both shown on the job. Matches,
+Interested, Applied and Missed jobs show when a source last confirmed their advert, or that it
+has gone; interested jobs whose adverts go move to Missed. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -40,14 +42,22 @@ FEEDBACK_SHORT = {"reject": "Rejected", "rate_higher": "Rate higher", "rate_lowe
                   "score_higher": "Score higher", "score_lower": "Score lower"}
 NOTE_MAX = 2000
 DIR_MAX = 1000
+# A job is listed while it has an open advert, and, if it was ever seen on a source that lists
+# every current advert (not an email alert), while one of those is still open.
+LISTED = "j.status = 'open' AND coalesce(cf.still_listed, true)"
+# Interested, Applied and Missed jobs stay on their tabs after their adverts go: Interested
+# ones whose adverts are confirmed gone move to Missed (store.confirm_tracked_jobs).
 VIEWS = {
-    "match": ("Matches", "s.verdict = 'match' AND r.decision IS NULL"),
-    "maybe": ("Maybes", "s.verdict = 'maybe' AND r.decision IS NULL"),
+    "match": ("Matches", f"{LISTED} AND s.verdict = 'match' AND r.decision IS NULL"),
+    "maybe": ("Maybes", f"{LISTED} AND s.verdict = 'maybe' AND r.decision IS NULL"),
     "interested": ("Interested", "r.decision = 'interested'"),
     "applied": ("Applied", "r.decision = 'applied'"),
-    "not_interested": ("Not interested", "r.decision = 'not_interested'"),
-    "no": ("Filtered out", "s.verdict = 'no' AND r.decision IS NULL"),
+    "missed": ("Missed", "r.decision = 'missed'"),
+    "not_interested": ("Not interested", f"{LISTED} AND r.decision = 'not_interested'"),
+    "no": ("Filtered out", f"{LISTED} AND s.verdict = 'no' AND r.decision IS NULL"),
 }
+# Tabs whose jobs show when they were last confirmed on a source, or that their advert has gone.
+CONFIRMED_VIEWS = {"match", "interested", "applied", "missed"}
 
 # First-seen filter presets, in hours.
 SEEN_WITHIN = {"": "Any time", "6": "Last 6 hours", "24": "Last 24 hours", "72": "Last 3 days",
@@ -78,20 +88,24 @@ QUERY = """
 SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.decision,
        j.first_seen_at AT TIME ZONE %(tz)s, jc.closes_at AT TIME ZONE %(tz)s, jc.is_deadline,
        jc.closes_at < now(), r.applied_at AT TIME ZONE %(tz)s, r.application_dir,
-       (SELECT p.url FROM postings p WHERE p.job_id = j.id AND p.closed_at IS NULL
-        ORDER BY p.last_seen_at DESC LIMIT 1) AS url,
+       -- The open advert seen last, or for a job whose adverts have all gone, the last one.
+       (SELECT p.url FROM postings p WHERE p.job_id = j.id
+        ORDER BY p.closed_at IS NULL DESC, p.last_seen_at DESC LIMIT 1) AS url,
        (SELECT string_agg(DISTINCT p.location_text, ' | ') FROM postings p
-        WHERE p.job_id = j.id AND p.closed_at IS NULL) AS locations,
+        WHERE p.job_id = j.id AND (p.closed_at IS NULL OR j.status = 'closed')) AS locations,
        -- An email alert is labelled by who sent it ("LinkedIn alert"), not as the inbox.
        (SELECT string_agg(DISTINCT COALESCE(p.raw->>'alert_from' || ' alert', so.name), ', ')
         FROM postings p JOIN sources so ON so.id = p.source_id
-        WHERE p.job_id = j.id AND p.closed_at IS NULL) AS sources
+        WHERE p.job_id = j.id AND (p.closed_at IS NULL OR j.status = 'closed')) AS sources,
+       cf.job_id IS NOT NULL, cf.confirmed_at AT TIME ZONE %(tz)s,
+       r.ad_gone_at AT TIME ZONE %(tz)s, j.last_seen_at AT TIME ZONE %(tz)s
 FROM jobs j
 JOIN job_scores s ON s.job_id = j.id
 LEFT JOIN job_reviews r ON r.job_id = j.id
 LEFT JOIN companies c ON c.id = j.company_id
 LEFT JOIN job_closing jc ON jc.job_id = j.id
-WHERE j.status = 'open' AND {where} {filters}
+LEFT JOIN job_confirmation cf ON cf.job_id = j.id
+WHERE {where} {filters}
   AND (%(q)s = '' OR j.title ILIKE %(like)s OR c.name ILIKE %(like)s)
 ORDER BY {order}
 LIMIT %(limit)s OFFSET %(offset)s
@@ -100,7 +114,8 @@ LIMIT %(limit)s OFFSET %(offset)s
 COUNTS = """
 SELECT {cases} FROM jobs j JOIN job_scores s ON s.job_id = j.id
 LEFT JOIN job_reviews r ON r.job_id = j.id LEFT JOIN job_closing jc ON jc.job_id = j.id
-WHERE j.status = 'open' {filters}
+LEFT JOIN job_confirmation cf ON cf.job_id = j.id
+WHERE true {filters}
 """.format(cases=", ".join(f"count(*) FILTER (WHERE {where})" for _, where in VIEWS.values()),
            filters=FILTERS)
 
@@ -156,7 +171,7 @@ main { padding:8px 20px 40px; max-width:1100px; }
 .match .score { color:var(--good); } .maybe .score { color:var(--warn); } .no .score { color:var(--bad); }
 .title a { color:var(--accent); font-weight:600; text-decoration:none; }
 .meta { color:var(--muted); font-size:13px; margin:2px 0 4px 46px; }
-.meta .soon { color:var(--bad); font-weight:600; }
+.meta .soon, .meta .gone { color:var(--bad); font-weight:600; }
 .reasons { margin:0 0 6px 46px; font-size:13px; }
 .reasons span { display:inline-block; background:var(--chip); border-radius:10px; padding:1px 8px;
                 margin:2px 4px 2px 0; }
@@ -273,7 +288,7 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     now = datetime.now(ZoneInfo(DISPLAY_TZ))
     for (job_id, job_title, company, verdict, score, level, reasons, decision, first_seen,
          closes_at, is_deadline, closed_already, applied_at, application_dir, url, locations,
-         sources) in rows:
+         sources, checkable, confirmed_at, ad_gone_at, last_seen) in rows:
         # "Applied" opens a form asking when and where the application is, instead of saving.
         buttons = "".join(
             f'<button type="button" onclick="openApply({job_id})" class="{"on" if decision == key else ""}">'
@@ -291,7 +306,8 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     <span class="title"><a href="{esc(url)}" target="_blank" rel="noopener">{esc(job_title)}</a></span>
     <span>{esc(company)}</span></div>
   <div class="meta">{esc(locations or "location not given")} · {esc(sources)} ·
-    first seen {first_seen:%d %b %H:%M}{render_closing(closes_at, is_deadline, closed_already)}</div>
+    first seen {first_seen:%d %b %H:%M}{render_closing(closes_at, is_deadline, closed_already)}{
+    render_confirmed(checkable, confirmed_at, ad_gone_at, last_seen) if view in CONFIRMED_VIEWS else ""}</div>
   <div class="reasons">{chips}</div>
   <form class="actions" method="post" action="/review">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -355,6 +371,19 @@ def render_closing(closes_at: datetime | None, is_deadline: bool, passed: bool) 
     soon = closes_at - datetime.now(ZoneInfo(DISPLAY_TZ)).replace(tzinfo=None) < timedelta(days=2)
     label = "apply by" if is_deadline else "ad ends"
     return f' · <span class="{"soon" if soon else ""}">{label} {when}</span>'
+
+
+def render_confirmed(checkable: bool, confirmed_at: datetime | None,
+                     ad_gone_at: datetime | None, last_seen: datetime) -> str:
+    """" · advert gone 2 Nov 17:30" once a tracked job's adverts have gone, " · confirmed
+    2 Nov 17:30" while one is still listed, or a note that a job known only from email alerts
+    can't be confirmed. Times are DISPLAY_TZ local times."""
+    if ad_gone_at is not None:
+        return f' · <span class="gone">advert gone {ad_gone_at:%d %b %H:%M}</span>'
+    if checkable:
+        return f" · confirmed {confirmed_at:%d %b %H:%M}"
+    return (f' · <span title="Email alerts only announce adverts, so they can\'t show one has '
+            f'gone">email alerts only, last seen {last_seen:%d %b %H:%M}</span>')
 
 
 def render_apply(job_id: int, decision: str | None, applied_at: datetime | None,

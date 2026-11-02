@@ -171,3 +171,70 @@ def test_job_closing_view(conn):
         "JOIN job_closing c ON c.job_id = j.id"))
     assert rows == {"Both expire": ("2026-11-05", False), "One never expires": (None, False),
                     "Deadline": ("2026-11-03", True)}
+
+
+def review(conn, decision):
+    conn.execute("INSERT INTO job_reviews (job_id, decision) SELECT id, %s FROM jobs", (decision,))
+    conn.commit()
+
+
+def reviewed(conn):
+    return conn.execute("SELECT decision, ad_gone_at IS NOT NULL FROM job_reviews").fetchone()
+
+
+def test_interested_job_whose_adverts_go_is_missed_and_comes_back(conn):
+    run_collector(conn, FakeCollector("board_a", [posting("1")]))
+    run_collector(conn, FakeCollector("board_b", [posting("b1")]))
+    review(conn, "interested")
+
+    run_collector(conn, FakeCollector("board_a", []))
+    assert reviewed(conn) == ("interested", False)  # still on board_b
+    run_collector(conn, FakeCollector("board_b", []))
+    assert reviewed(conn) == ("missed", True)
+
+    run_collector(conn, FakeCollector("board_a", [posting("1")]))
+    assert reviewed(conn) == ("interested", False)
+
+
+def test_applied_job_keeps_its_decision_when_the_advert_goes(conn):
+    run_collector(conn, FakeCollector("board_a", [posting("1")]))
+    review(conn, "applied")
+    run_collector(conn, FakeCollector("board_a", []))
+    assert reviewed(conn) == ("applied", True)
+    gone_at = conn.execute("SELECT ad_gone_at FROM job_reviews").fetchone()[0]
+    run_collector(conn, FakeCollector("board_a", []))  # later checks leave the time alone
+    assert conn.execute("SELECT ad_gone_at FROM job_reviews").fetchone()[0] == gone_at
+
+
+def test_email_alerts_neither_confirm_nor_remove_a_job(conn):
+    class Email(FakeCollector):
+        source_kind = "email"
+
+    run_collector(conn, FakeCollector("board_a", [posting("1")]))
+    run_collector(conn, Email("email_alerts", [posting("e1")]))
+    review(conn, "interested")
+    # The board no longer lists it: the alert that mentioned it does not keep it interested.
+    run_collector(conn, FakeCollector("board_a", []))
+    assert reviewed(conn) == ("missed", True)
+    run_collector(conn, Email("email_alerts", [posting("e1")]))
+    assert reviewed(conn) == ("missed", True)
+
+    # A job known only from alerts can't be confirmed either way, so is left alone.
+    conn.execute("DELETE FROM job_reviews")
+    conn.execute("DELETE FROM postings WHERE source_id = (SELECT id FROM sources WHERE key = 'board_a')")
+    conn.commit()
+    review(conn, "interested")
+    run_collector(conn, Email("email_alerts", []))
+    assert reviewed(conn) == ("interested", False)
+
+
+def test_failed_check_confirms_nothing_away(conn):
+    run_collector(conn, FakeCollector("board_a", [posting("1")]))
+    review(conn, "interested")
+
+    class Partial(FakeCollector):
+        def incomplete_company_ids(self):
+            return {count(conn, "SELECT id FROM companies")}
+
+    run_collector(conn, Partial("board_a", []))
+    assert reviewed(conn) == ("interested", False)
