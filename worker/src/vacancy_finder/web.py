@@ -2,7 +2,8 @@
 one interested, not interested or applied, and feedback notes (reject for, rate higher or
 lower for, score higher or lower) kept with a snapshot of the ad for tuning later. Filters
 narrow every tab to jobs first seen recently (or since a given time), above a minimum score,
-or closing soon, sorted by score, newest first or closing soonest. A box in the top right shows
+or closing soon, sorted by score, newest first or closing soonest. Three toggles show or hide
+staff, manager and director-level roles (all shown by default). A box in the top right shows
 when each source was last checked, and whether that check failed. Marking a job applied asks
 for when (default now) and the folder holding the application, both shown on the job. Matches,
 Interested, Applied and Missed jobs show when a source last confirmed their advert, or that it
@@ -69,6 +70,8 @@ SORTS = {"score": ("Best score", "s.score DESC, j.first_seen_at DESC"),
          "new": ("Newest first", "j.first_seen_at DESC, s.score DESC"),
          "closing": ("Closing soonest", "CASE WHEN jc.closes_at >= now() THEN jc.closes_at END "
                                         "NULLS LAST, s.score DESC")}
+# Role levels (from job_scores.role_level) that can be toggled off; every other level always shows.
+ROLE_TOGGLES = {"staff": "Staff", "manager": "Manager", "director": "Director"}
 # Times are shown, and "since" is read, in this zone (Postgres has the zone data).
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "Europe/Warsaw")
 FILTERS = """
@@ -78,6 +81,7 @@ FILTERS = """
   AND (%(closes_days)s::int IS NULL OR (jc.closes_at >= now()
        AND jc.closes_at < now() + make_interval(days => %(closes_days)s::int)))
   AND (NOT %(deadline_only)s OR (jc.is_deadline AND jc.closes_at >= now()))
+  AND (s.role_level IS NULL OR s.role_level <> ALL(%(hidden_levels)s::text[]))
 """
 
 QUERY = """
@@ -150,6 +154,8 @@ h1 { font-size:20px; margin:0 0 10px; }
 nav a { display:inline-block; margin:0 6px 8px 0; padding:4px 10px; border-radius:14px;
         background:var(--chip); color:var(--fg); text-decoration:none; font-size:14px; }
 nav a.on { background:var(--accent); color:#fff; }
+nav.roles { font-size:14px; color:var(--muted); } nav.roles span { margin-right:8px; }
+nav.roles a { font-size:13px; padding:2px 10px; }
 form.search { display:inline; } form.search input { padding:4px 8px; border:1px solid var(--line);
   border-radius:6px; background:var(--bg); color:var(--fg); }
 form.filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 8px;
@@ -233,13 +239,16 @@ def esc(value) -> str:
 
 
 def render(view: str, q: str, page: int, seen: str = "", since: str = "",
-           min_score: str = "", sort: str = "score", closes: str = "") -> str:
+           min_score: str = "", sort: str = "score", closes: str = "", hide: str = "") -> str:
     """seen is a SEEN_WITHIN key, since a "YYYY-MM-DDTHH:MM" local time, min_score a whole
-    number, closes a CLOSES key; anything not in that form is ignored."""
+    number, closes a CLOSES key, hide a comma-separated list of ROLE_TOGGLES keys; anything
+    not in that form is ignored."""
     title, where = VIEWS[view]
     seen = seen if seen in SEEN_WITHIN else ""
     closes = closes if closes in CLOSES else ""
     sort = sort if sort in SORTS else "score"
+    hidden_levels = [k for k in ROLE_TOGGLES if k in hide.split(",")]
+    hide = ",".join(hidden_levels)
     try:
         since_at = datetime.fromisoformat(since) if since else None
     except ValueError:
@@ -250,10 +259,12 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
         min_value, min_score = None, ""
     filters = {"hours": int(seen) if seen else None, "since": since_at, "min_score": min_value,
                "closes_days": int(closes) if closes.isdigit() else None,
-               "deadline_only": closes == "deadline", "tz": DISPLAY_TZ}
+               "deadline_only": closes == "deadline", "hidden_levels": hidden_levels,
+               "tz": DISPLAY_TZ}
     # Carried on every link and form so the filters stay put across tabs, pages and buttons.
     keep = {k: v for k, v in {"seen": seen, "since": since, "min_score": min_score,
-                              "closes": closes, "sort": "" if sort == "score" else sort}.items() if v}
+                              "closes": closes, "hide": hide,
+                              "sort": "" if sort == "score" else sort}.items() if v}
     with connect() as conn:
         counts = conn.execute(COUNTS, filters).fetchone()
         checked = conn.execute(LAST_CHECKED, {"tz": DISPLAY_TZ}).fetchall()
@@ -315,7 +326,7 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
 <header>{render_checked(checked, now)}<h1>Vacancy finder</h1><nav>{tabs}
 <form class="search" method="get"><input type="hidden" name="view" value="{esc(view)}">
 {hidden(keep)}<input name="q" value="{esc(q)}" placeholder="Search title or company"></form></nav>
-{render_filters(view, q, seen, since, min_score, sort, closes)}</header>
+{render_filters(view, q, seen, since, min_score, sort, closes, hide)}{render_role_toggles(view, q, keep, hidden_levels)}</header>
 <main><h2 style="font-size:16px">{esc(title)}</h2>{body}{pager}</main></body></html>"""
 
 
@@ -403,14 +414,32 @@ def hidden(fields: dict) -> str:
     return "".join(f'<input type="hidden" name="{esc(k)}" value="{esc(v)}">' for k, v in fields.items())
 
 
+def render_role_toggles(view: str, q: str, keep: dict, hidden_levels: list[str]) -> str:
+    """One chip per toggleable role level: highlighted while shown, and a click flips it.
+    Each chip is a link, so the choice is part of the page address like the other filters."""
+    chips = []
+    for level, label in ROLE_TOGGLES.items():
+        shown = level not in hidden_levels
+        flipped = [k for k in ROLE_TOGGLES if (k in hidden_levels) != (k == level)]
+        params = {k: v for k, v in keep.items() if k != "hide"}
+        if flipped:
+            params["hide"] = ",".join(flipped)
+        title = f"{'Hide' if shown else 'Show'} {label.lower()}-level roles"
+        chips.append(f'<a class="{"on" if shown else ""}" role="switch" aria-checked="{str(shown).lower()}" '
+                     f'title="{esc(title)}" href="/?{urlencode({"view": view, "q": q, **params})}">'
+                     f'{"✓ " if shown else ""}{esc(label)}</a>')
+    return f'<nav class="roles"><span>Roles</span>{"".join(chips)}</nav>'
+
+
 def render_filters(view: str, q: str, seen: str, since: str, min_score: str, sort: str,
-                   closes: str = "") -> str:
+                   closes: str = "", hide: str = "") -> str:
     def options(choices: dict, chosen: str) -> str:
         return "".join(f'<option value="{esc(k)}"{" selected" if k == chosen else ""}>{esc(label)}</option>'
                        for k, label in choices.items())
-    clear = (f' <a href="/?{urlencode({"view": view, "q": q})}">Clear filters</a>'
+    # Clearing leaves the role toggles alone: they have their own on/off chips.
+    clear = (f' <a href="/?{urlencode({"view": view, "q": q, **({"hide": hide} if hide else {})})}">Clear filters</a>'
              if seen or since or min_score or closes or sort != "score" else "")
-    return f"""<form class="filters" method="get">{hidden({"view": view, "q": q})}
+    return f"""<form class="filters" method="get">{hidden({"view": view, "q": q, **({"hide": hide} if hide else {})})}
 <label>First seen <select name="seen">{options(SEEN_WITHIN, seen)}</select></label>
 <label>or since <input type="datetime-local" name="since" value="{esc(since)}"></label>
 <label>Min score <input type="number" name="min_score" value="{esc(min_score)}"></label>
@@ -537,7 +566,7 @@ class Handler(BaseHTTPRequestHandler):
             page = max(0, int(params.get("page", ["0"])[0]))
         except ValueError:
             page = 0
-        filters = {k: params.get(k, [""])[0].strip()[:20] for k in ("seen", "since", "min_score", "sort", "closes")}
+        filters = {k: params.get(k, [""])[0].strip()[:20] for k in ("seen", "since", "min_score", "sort", "closes", "hide")}
         self._send(HTTPStatus.OK, render(view, q, page, **filters))
 
     def do_POST(self) -> None:
