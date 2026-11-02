@@ -199,3 +199,31 @@ def fill_deadlines(conn: psycopg.Connection) -> int:
         )
     conn.commit()
     return len(found)
+
+
+def confirm_tracked_jobs(conn: psycopg.Connection) -> tuple[int, int]:
+    """Re-check the jobs James is interested in or has applied for against the sources that
+    list every current advert (see the job_confirmation view; email alerts can't say an advert
+    has gone). When none of a job's adverts there is open any more, the time is kept in
+    ad_gone_at, and an interested job becomes missed; an applied job stays applied. If an
+    advert comes back, both are undone. Returns (newly gone, back again)."""
+    gone = conn.execute(
+        """
+        UPDATE job_reviews r
+        SET ad_gone_at = coalesce(cf.gone_at, now()),
+            decision = CASE WHEN r.decision = 'interested' THEN 'missed' ELSE r.decision END
+        FROM job_confirmation cf
+        WHERE cf.job_id = r.job_id AND NOT cf.still_listed
+          AND r.decision IN ('interested', 'applied') AND r.ad_gone_at IS NULL
+        """
+    ).rowcount
+    back = conn.execute(
+        """
+        UPDATE job_reviews r
+        SET ad_gone_at = NULL,
+            decision = CASE WHEN r.decision = 'missed' THEN 'interested' ELSE r.decision END
+        FROM job_confirmation cf
+        WHERE cf.job_id = r.job_id AND cf.still_listed AND r.ad_gone_at IS NOT NULL
+        """
+    ).rowcount
+    return gone, back

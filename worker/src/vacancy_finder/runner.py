@@ -6,7 +6,7 @@ from datetime import timedelta
 import psycopg
 
 from .collectors import Collector
-from .store import close_unseen, ensure_source, upsert_posting
+from .store import close_unseen, confirm_tracked_jobs, ensure_source, upsert_posting
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +37,8 @@ def run_collector(conn: psycopg.Connection, collector: Collector) -> None:
             started_at - timedelta(days=stale_days),
             skip_company_ids=collector.incomplete_company_ids(),
         )
+        # Interested and applied jobs whose adverts have now all gone are flagged.
+        gone, back = confirm_tracked_jobs(conn)
         conn.execute(
             """
             UPDATE collection_runs
@@ -47,6 +49,8 @@ def run_collector(conn: psycopg.Connection, collector: Collector) -> None:
         )
         conn.commit()
         log.info("%s: %d seen, %d new, %d closed", collector.source_key, seen, new, closed)
+        if gone or back:
+            log.info("%s: %d tracked jobs' adverts gone, %d back", collector.source_key, gone, back)
     except Exception as exc:
         conn.rollback()
         conn.execute(
