@@ -211,3 +211,40 @@ def test_email_jobs_name_the_alert_sender(conn, monkeypatch):  # noqa: F811
     page = "".join(web.render(view, "", 0).split("<main>")[1] for view in web.VIEWS)
     assert "LinkedIn alert" in page and "Orbit &amp; Co" in page
     assert "Job-alert emails" not in page
+
+
+def test_role_toggles_hide_staff_manager_and_director(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    source = ensure_source(conn, "test", "Test board", "board")
+    for n, title in (("1", "Engineering Manager"), ("2", "Staff Python Engineer"),
+                     ("3", "Head of Engineering"), ("4", "Senior Python Engineer")):
+        upsert_posting(conn, source, RawPosting(
+            external_id=n, url=f"https://x.example/{n}", title=title, company_name=f"Orbit {n}",
+            location_text="Remote, Europe", work_mode="remote",
+            description="Python and PostgreSQL for satellite imagery. You will lead the team."))
+    conn.commit()
+    score_all(conn)
+    levels = dict(conn.execute(
+        "SELECT j.title, s.role_level FROM jobs j JOIN job_scores s ON s.job_id = j.id").fetchall())
+    assert levels["Engineering Manager"] == "manager" and levels["Head of Engineering"] == "director"
+    assert levels["Staff Python Engineer"] == "staff" and levels["Senior Python Engineer"] == "senior"
+
+    def shown(hide: str = "") -> set[str]:  # job titles listed on any tab
+        lists = "".join(web.render(v, "", 0, hide=hide).split("<main>")[1] for v in web.VIEWS)
+        return {t for t in levels if t in lists}
+
+    # All on by default, each chip linking to the page with that level hidden.
+    assert shown() == set(levels)
+    page = web.render("match", "", 0)
+    assert page.count('aria-checked="true"') == 3 and "hide=staff" in page
+
+    assert shown("staff") == set(levels) - {"Staff Python Engineer"}
+    page = web.render("match", "", 0, hide="staff,director,bogus", seen="24")
+    assert "Staff Python Engineer" not in page and "Head of Engineering" not in page
+    assert page.count('aria-checked="false"') == 2
+    assert "hide=staff%2Cdirector" in page and "seen=24" in page  # tabs and links keep it
+    assert 'name="hide" value="staff,director"' in page  # so does the filters form
+    # The Staff chip turns staff back on and keeps director hidden.
+    assert 'href="/?view=match&q=&seen=24&hide=director">Staff</a>' in page
+
+    assert shown("staff,manager,director") == {"Senior Python Engineer"}  # other levels show
