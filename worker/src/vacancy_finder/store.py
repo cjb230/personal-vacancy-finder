@@ -223,19 +223,18 @@ def close_expired_unseen(conn: psycopg.Connection, source_id: int, seen_since: d
     ).rowcount
 
 
-def missing_tracked_urls(conn: psycopg.Connection, source_id: int, seen_since: datetime,
-                         limit: int = 50) -> list[str]:
-    """Advert urls of this source's open postings for tracked jobs that this run did not see,
-    least recently seen first."""
-    rows = conn.execute(
+def missing_tracked_postings(conn: psycopg.Connection, source_id: int, seen_since: datetime,
+                             limit: int = 50) -> list[tuple[str, str, str]]:
+    """(url, title, company) of this source's open postings for tracked jobs that this run did
+    not see, least recently seen first."""
+    return conn.execute(
         f"""
-        SELECT p.url FROM postings p
+        SELECT p.url, p.title, p.company_name FROM postings p
         WHERE p.source_id = %s AND p.closed_at IS NULL AND p.last_seen_at < %s AND {TRACKED_JOB}
         ORDER BY p.last_seen_at LIMIT %s
         """,
         (source_id, seen_since, limit),
     ).fetchall()
-    return [url for (url,) in rows]
 
 
 def close_postings_by_url(conn: psycopg.Connection, source_id: int, urls: set[str]) -> int:

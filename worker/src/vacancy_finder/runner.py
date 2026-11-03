@@ -12,7 +12,7 @@ from .store import (
     close_unseen,
     confirm_tracked_jobs,
     ensure_source,
-    missing_tracked_urls,
+    missing_tracked_postings,
     upsert_posting,
 )
 
@@ -41,10 +41,10 @@ def run_collector(conn: psycopg.Connection, collector: Collector) -> None:
         stale_days = getattr(collector, "stale_after_days", 0)
         if stale_days:
             # Absence from such a feed proves nothing, but a passed expiry date does, and
-            # tracked jobs' advert pages can be checked one by one where the collector can.
+            # tracked jobs can be looked up one by one where the collector can.
             close_expired_unseen(conn, source_id, started_at)
             if hasattr(collector, "gone_adverts") and (
-                    missing := missing_tracked_urls(conn, source_id, started_at)):
+                    missing := missing_tracked_postings(conn, source_id, started_at)):
                 close_postings_by_url(conn, source_id, collector.gone_adverts(missing))
         closed = close_unseen(
             conn,

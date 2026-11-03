@@ -293,19 +293,26 @@ def test_hn_salary(line, expected):
 
 
 def test_himalayas_gone_adverts():
-    base = "https://himalayas.app/companies/acme/jobs/"
-    answers = {
-        "gone": httpx.Response(404),
-        "moved": httpx.Response(301, headers={"location": "/companies/acme"}),
-        "slash": httpx.Response(308, headers={"location": base + "slash/"}),
-        "here": httpx.Response(200, text="<h1>Staff Engineer</h1>"),
-        "error": httpx.Response(503),
+    def guid(name):
+        return f"https://himalayas.app/companies/acme/jobs/{name}"
+
+    results = {
+        "here Acme": [dict(HIMALAYAS_JOB, guid=guid("other")), dict(HIMALAYAS_JOB, guid=guid("here"))],
+        "gone Acme": [dict(HIMALAYAS_JOB, guid=guid("other"))],
+        # Three full pages without it: too many results to be sure, so it stays.
+        "common Acme": [dict(HIMALAYAS_JOB, guid=guid(f"x{i}")) for i in range(20)],
     }
+    asked = []
 
     def handler(request):
-        return answers[request.url.path.rstrip("/").rsplit("/", 1)[-1]]
+        q = request.url.params["q"]
+        asked.append((q, request.url.params["page"]))
+        if q == "broken Acme":
+            return httpx.Response(503)
+        return httpx.Response(200, json={"jobs": results[q]})
 
     collector = HimalayasCollector(httpx.Client(transport=httpx.MockTransport(handler)),
                                    delay_seconds=0)
-    urls = [base + name for name in answers]
-    assert collector.gone_adverts(urls) == {base + "gone", base + "moved"}
+    postings = [(guid(name), name, "Acme") for name in ("here", "gone", "common", "broken")]
+    assert collector.gone_adverts(postings) == {guid("gone")}
+    assert ("common Acme", "3") in asked and ("common Acme", "4") not in asked

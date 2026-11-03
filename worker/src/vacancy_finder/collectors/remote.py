@@ -128,33 +128,35 @@ class HimalayasCollector(FeedCollector):
                 if len(jobs) < 20:
                     break
 
-    def gone_adverts(self, urls: list[str]) -> set[str]:
-        """Of these advert pages (missing from today's searches, which only reach the top
-        results), the ones Himalayas no longer has: not found, or redirected elsewhere, such as
-        to the company's page. Anything else, including errors, counts as still there."""
-        client = self._client or self.new_client(follow_redirects=False)
+    def gone_adverts(self, postings: list[tuple[str, str, str]]) -> set[str]:
+        """Of these (url, title, company) postings, missing from today's searches (which only
+        reach the top results), the urls Himalayas no longer has. Each is searched for by its
+        exact title: it is gone only if every result was read and it wasn't among them. A long
+        result list or an API error leaves it open. Advert pages can't be used instead:
+        Cloudflare answers them all with a 403 bot check."""
         gone = set()
+        client = self._client or self.new_client()
         try:
-            for url in urls:
+            for url, title, company in postings:
                 try:
-                    response = self.check(client, url)
+                    if self.search_lacks(client, url, f"{title} {company}"):
+                        gone.add(url)
                 except httpx.HTTPError as exc:
-                    log.info("himalayas: could not check %s: %r", url, exc)
-                    continue
-                moved = response.is_redirect and httpx.URL(url).join(
-                    response.headers.get("location", "")).path.rstrip("/") != httpx.URL(url).path.rstrip("/")
-                if response.status_code in (404, 410) or moved:
-                    gone.add(url)
+                    log.info("himalayas: could not re-check %s: %r", url, exc)
         finally:
             if self._client is None:
                 client.close()
         return gone
 
-    def check(self, client: httpx.Client, url: str) -> httpx.Response:
-        if self._requests:
-            time.sleep(self.delay)
-        self._requests += 1
-        return client.get(url, follow_redirects=False)
+    def search_lacks(self, client: httpx.Client, url: str, query: str, max_pages: int = 3) -> bool:
+        for page in range(1, max_pages + 1):
+            jobs = self.get(client, self.url, q=query, country="Poland", page=page).json()
+            jobs = jobs.get("jobs") or []
+            if any(job.get("guid") == url for job in jobs):
+                return False
+            if len(jobs) < 20:
+                return True
+        return False
 
     def parse(self, job: dict[str, Any]) -> RawPosting:
         restrictions = job.get("locationRestrictions") or []
