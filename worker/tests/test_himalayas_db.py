@@ -97,3 +97,13 @@ def test_listed_adverts_are_not_looked_up(conn):  # noqa: F811
     site = Site([LIVE])
     run_collector(conn, site.collector())
     assert site.lookups == []
+
+
+def test_missing_advert_past_its_expiry_date_is_closed(conn):  # noqa: F811
+    run_collector(conn, Site([LIVE, OTHER]).collector())
+    conn.execute("UPDATE postings SET closes_at = now() - interval '1 hour', closes_kind = 'expiry'")
+    conn.commit()
+    # OTHER is still in the role search, so its stale expiry date doesn't close it; LIVE
+    # isn't, and nothing is looked up for it (max_checks=0), but its expiry has passed.
+    run_collector(conn, Site([OTHER]).collector(max_checks=0))
+    assert open_urls(conn) == [OTHER]
