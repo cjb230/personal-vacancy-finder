@@ -139,6 +139,33 @@ def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting
     return row[0]
 
 
+def close_postings(conn: psycopg.Connection, source_id: int, external_ids: set[str]) -> int:
+    """Close these open postings of a source now, e.g. adverts found to have expired.
+    close_unseen, which runs after, closes the jobs left with no open postings."""
+    if not external_ids:
+        return 0
+    return conn.execute(
+        """
+        UPDATE postings SET closed_at = now()
+        WHERE source_id = %s AND closed_at IS NULL AND external_id = ANY(%s)
+        """,
+        (source_id, list(external_ids)),
+    ).rowcount
+
+
+def close_expired_unseen(conn: psycopg.Connection, source_id: int, seen_since: datetime) -> int:
+    """Close this source's postings missing from this run whose advert has passed the expiry
+    date the source gave, without waiting out the source's stale window."""
+    return conn.execute(
+        """
+        UPDATE postings SET closed_at = now()
+        WHERE source_id = %s AND closed_at IS NULL AND last_seen_at < %s
+          AND closes_kind = 'expiry' AND closes_at < now()
+        """,
+        (source_id, seen_since),
+    ).rowcount
+
+
 def close_unseen(
     conn: psycopg.Connection,
     source_id: int,

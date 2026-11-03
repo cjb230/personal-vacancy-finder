@@ -6,7 +6,14 @@ from datetime import timedelta
 import psycopg
 
 from .collectors import Collector
-from .store import close_unseen, confirm_tracked_jobs, ensure_source, upsert_posting
+from .store import (
+    close_expired_unseen,
+    close_postings,
+    close_unseen,
+    confirm_tracked_jobs,
+    ensure_source,
+    upsert_posting,
+)
 
 log = logging.getLogger(__name__)
 
@@ -27,11 +34,17 @@ def run_collector(conn: psycopg.Connection, collector: Collector) -> None:
             seen += 1
             if upsert_posting(conn, source_id, posting):
                 new += 1
+        # Postings the collector checked and found gone close now, whatever stale_after_days says.
+        gone_ids = getattr(collector, "gone_external_ids", lambda: set())()
+        gone_now = close_postings(conn, source_id, gone_ids)
+        # A posting missing from this run whose advert's own expiry date has passed has gone
+        # too, even on feeds whose absence alone proves nothing.
+        gone_now += close_expired_unseen(conn, source_id, started_at)
         # Only close what is missing after a successful pass, and not for companies that failed.
         # Feeds that only show the latest N jobs close a posting after it has been
         # missing for a while, rather than on its first absence.
         stale_days = getattr(collector, "stale_after_days", 0)
-        closed = close_unseen(
+        closed = gone_now + close_unseen(
             conn,
             source_id,
             started_at - timedelta(days=stale_days),
