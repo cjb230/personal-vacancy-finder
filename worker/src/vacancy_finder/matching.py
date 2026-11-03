@@ -4,6 +4,8 @@ The criteria (see the project notes, 2026-10-26):
 - Roles: engineering manager / lead, staff / principal IC, or director-level as long as the
   advert doesn't demand previous director experience. Python and relational databases.
 - Location: fully remote (EU/Europe), hybrid in Warsaw, or hybrid elsewhere with little travel.
+  Jobs listed only for the US or Canada, or only for US citizens, are out (2026-11-03).
+- Jobs found on Hacker News "Who is hiring?" get +10 (2026-11-03).
 - Sectors: space (incl. Earth observation, GIS) first; energy, green tech, health, edtech,
   robotics next. Never tobacco or gambling / free-to-play games.
 - English adverts only, and no requirement to speak Polish or another language.
@@ -142,6 +144,29 @@ OUTSIDE_EUROPE = _rx(
     r"|,\s*(?!(?:DE|FR|ES|IT|PT|NL|BE|AT|CH|UK|GB|IE|SE|NO|DK|FI|EE|LV|LT|CZ|SK|HU|RO|BG|GR|HR"
     r"|SI|PL|UA|RS|LU|EU)\b)(?-i:[A-Z]{2})\s*(?:$|\|)"
 )
+# Places in the US or Canada. A job listed only for these is ruled out (James, 2026-11-03).
+NORTH_AMERICA = _rx(
+    r"\b(us|usa|u\.s\.a?\.?|united states|america|americas|north america|canada|us[- ]based"
+    r"|(us|pst|pdt|est|edt|cst|pacific|eastern|central) time ?(zones?|hours)?|pst|pacific time"
+    r"|san francisco|sf|bay area|silicon valley|new york|nyc|seattle|boston|chicago|denver|boulder"
+    r"|austin|dallas|houston|atlanta|miami|los angeles|san diego|san jose|palo alto|mountain view"
+    r"|menlo park|redwood city|san mateo|san carlos|oakland|berkeley|santa clara|brooklyn"
+    r"|philadelphia|jersey city|washington,? d\.?c|portland|bellevue|toronto|vancouver|montreal"
+    r"|ottawa|calgary|kansas|texas|california|colorado|florida|virginia|massachusetts)\b"
+    r"|,\s*(?!(?:DE|FR|ES|IT|PT|NL|BE|AT|CH|UK|GB|IE|SE|NO|DK|FI|EE|LV|LT|CZ|SK|HU|RO|BG|GR|HR"
+    r"|SI|PL|UA|RS|LU|EU)\b)(?-i:[A-Z]{2})\b"
+)
+# Regions outside North America and Europe: a job also open there isn't US-only.
+OTHER_REGIONS = _rx(
+    r"\b(latam|latin america|south america|brazil|mexico|apac|asia|australia|new zealand|india"
+    r"|africa|middle east|philippines|japan|tokyo|singapore|israel)\b"
+)
+US_CITIZENS = _rx(
+    r"\b(u\.?s\.?|united states|american) citizen(s|ship)?\b(?![^.\n]{0,20}\bnot (required|needed))"
+)
+HN_SOURCE = "hn-whoishiring"
+HN_BONUS = 10
+
 # Single European countries other than Poland: remote "within Spain" usually means living there.
 OTHER_EU_COUNTRY = _rx(
     r"\b(germany|deutschland|spain|espa[nñ]a|france|italy|portugal|netherlands|belgium|austria"
@@ -251,6 +276,7 @@ class JobFacts:
     languages: set[str | None] = field(default_factory=set)
     required_languages: set[str] = field(default_factory=set)
     contract_types: set[str] = field(default_factory=set)
+    sources: set[str] = field(default_factory=set)
     take_home_max: Decimal | None = None  # monthly take-home in PLN, best of the postings
 
 
@@ -379,6 +405,10 @@ def score_job(job: JobFacts) -> Score:
         points -= 10
         reasons.append(f"in {place}, work mode not stated: probably on-site (-10)")
         caps.append(f"based in {place}: check whether remote is possible")
+    if us_only(place or title):
+        blockers.append(f"only for the US/North America ({place or title})")
+    if match := US_CITIZENS.search(everything):
+        blockers.append(f"US citizens only (\"{match.group(0).strip()}\")")
     if TIME_ZONE_OVERLAP.search(f"{place}\n{title}\n{text}"):
         reasons.append("asks for overlap with US/other time zones: check the hours")
 
@@ -399,6 +429,10 @@ def score_job(job: JobFacts) -> Score:
     elif GOOD_WORDS.search(f"{title}\n{job.company or ''}") or GOOD_PHRASES.search(text):
         points += 6
         reasons.append("energy / climate / health / education / robotics (+6)")
+
+    if HN_SOURCE in job.sources:
+        points += HN_BONUS
+        reasons.append(f"found on Hacker News (+{HN_BONUS})")
 
     # Pay.
     if job.take_home_max is not None:
@@ -426,6 +460,14 @@ def score_job(job: JobFacts) -> Score:
         verdict = "maybe"
         reasons.append("not clearly software work: at most a maybe")
     return Score(verdict, points, role_level, reasons)
+
+
+def us_only(place: str) -> bool:
+    """True when a place names only the US or Canada, e.g. "Remote (US)" or "NYC / Toronto"."""
+    return bool(NORTH_AMERICA.search(place)) and not (
+        EUROPE_WIDE.search(place) or POLAND.search(place) or OTHER_EU_COUNTRY.search(place)
+        or OTHER_REGIONS.search(place) or re.search(r"\b(london|berlin|paris|amsterdam|munich"
+                                                    r"|lisbon|madrid|zurich|dublin)\b", place, re.I))
 
 
 def monthly_pln(amount: Decimal | None, currency: str | None, period: str | None) -> Decimal | None:
@@ -472,6 +514,7 @@ def load_facts(conn: psycopg.Connection) -> list[JobFacts]:
         if description:
             job.descriptions.append(description)
         job.languages.add(language)
+        job.sources.add(source)
         job.required_languages |= required_languages(source, raw)
         if contract:
             job.contract_types.add(contract.lower())

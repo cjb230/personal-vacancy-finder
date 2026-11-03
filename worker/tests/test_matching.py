@@ -10,7 +10,7 @@ from vacancy_finder.matching import (JobFacts, b2b_take_home, monthly_pln, pay_p
 
 def job(title, *, description="We use Python and PostgreSQL. You will lead the team.", company="Acme",
         sectors=(), modes=("remote",), locations=("Europe",), languages=("en",), required=(),
-        contracts=(), pay=None, excluded=False):
+        contracts=(), pay=None, excluded=False, sources=()):
     facts = JobFacts(1, title, company, list(sectors), excluded)
     facts.work_modes = set(modes)
     facts.locations = list(locations)
@@ -19,6 +19,7 @@ def job(title, *, description="We use Python and PostgreSQL. You will lead the t
     facts.required_languages = set(required)
     facts.contract_types = set(contracts)
     facts.take_home_max = pay
+    facts.sources = set(sources)
     return facts
 
 
@@ -69,8 +70,15 @@ def test_polish_advert_or_polish_requirement_is_out():
 
 
 @pytest.mark.parametrize("modes, locations, verdict_no", [
-    (("remote",), ("United States",), False),
-    (("remote",), ("Remote - US only",), False),
+    (("remote",), ("United States",), True),
+    (("remote",), ("Remote - US only",), True),
+    (("remote",), ("US/Canada, Pacific Time hours",), True),
+    (("hybrid",), ("San Francisco, CA",), True),
+    (("remote",), ("US, Brazil or EU",), False),
+    (("remote",), ("US, Canada, Poland",), False),
+    (("remote",), ("US/EU timezones preferred",), False),
+    (("remote",), ("NYC or REMOTE (US, Europe, South America)",), False),
+    (("remote",), ("LATAM",), False),
     (("remote",), ("EMEA",), False),
     (("remote",), (), False),
     (("hybrid",), ("Warsaw, Poland",), False),
@@ -143,16 +151,19 @@ def test_content_systems_is_engineering():
     assert score_job(job("Senior Principal Engineer - AI Content Systems")).verdict != "no"
 
 
-@pytest.mark.parametrize("modes, locations", [
-    (("unknown",), ("San Francisco, CA",)),
-    (("hybrid",), ("Abu Dhabi",)),
-    (("remote",), ("Boulder, CO",)),
-    (("remote",), ("United States",)),
+@pytest.mark.parametrize("modes, locations, verdict", [
+    (("hybrid",), ("Abu Dhabi",), "maybe"),
+    (("remote",), ("LATAM, EMEA time zones",), "match"),
+    (("remote",), ("APAC",), "maybe"),
+    # Listed only for the US or Canada: ruled out.
+    (("unknown",), ("San Francisco, CA",), "no"),
+    (("remote",), ("Boulder, CO",), "no"),
+    (("remote",), ("United States",), "no"),
 ])
-def test_outside_europe_is_a_maybe_not_ruled_out(modes, locations):
+def test_outside_europe_is_a_maybe_unless_us_only(modes, locations, verdict):
     result = score_job(job("Staff Python Engineer", modes=modes, locations=locations,
                            sectors=["space"], pay=Decimal(40000)))
-    assert result.verdict == "maybe"
+    assert result.verdict == verdict
 
 
 def test_remote_anywhere_and_time_zone_overlap():
@@ -224,8 +235,8 @@ def test_region_from_headline_when_no_location():
                            sectors=["space"], description=(
                                "Remote (US) Close ( https://close.com ) | Senior/Staff Backend "
                                "Engineer | Full-time\nWe use Python and PostgreSQL.")))
-    assert result.verdict == "maybe"
-    assert "remote, listed for US (+5)" in result.reasons
+    assert result.verdict == "no"
+    assert result.reasons[0] == "only for the US/North America (US)"
     # "Join us" in a headline isn't a region.
     assert not any("listed for" in r for r in score_job(job(
         "Staff Python Engineer", locations=(), description="Remote. Join us!\nPython.")).reasons)
@@ -255,3 +266,26 @@ def test_b2b_itself_earns_no_points():
 ])
 def test_pay_points(take_home, points):
     assert pay_points(Decimal(take_home)) == points
+
+
+def test_us_only_title_is_out():
+    result = score_job(job("Data Engineer — Remote — US Only", locations=()))
+    assert result.verdict == "no"
+    assert result.reasons[0].startswith("only for the US/North America")
+
+
+@pytest.mark.parametrize("text, out", [
+    ("Python. Must be a U.S. citizen.", True),
+    ("Python. US Citizenship Required.", True),
+    ("Python. US citizenship not required.", False),
+    ("Python. We sponsor visas.", False),
+])
+def test_us_citizens_only_is_out(text, out):
+    assert (score_job(job("Staff Python Engineer", description=text)).verdict == "no") == out
+
+
+def test_hacker_news_bonus():
+    plain = score_job(job("Staff Python Engineer"))
+    hn = score_job(job("Staff Python Engineer", sources=("hn-whoishiring",)))
+    assert hn.score == plain.score + 10
+    assert "found on Hacker News (+10)" in hn.reasons
