@@ -7,7 +7,9 @@ Arbeitnow ask for a link back; each posting's url points at their page.
 returns only 10 day-old jobs.)
 
 These feeds list only recent jobs, so a posting is closed after it has been
-missing for `stale_after_days`, not on its first absence.
+missing for `stale_after_days`, not on its first absence. Himalayas also looks up open postings
+its role searches no longer return by searching for their company: an advert that has
+expired (its page then redirects to https://himalayas.app/jobs) is no longer in the search.
 """
 
 import logging
@@ -27,6 +29,7 @@ import psycopg
 from ..models import RawPosting
 from ..normalize import PLACEHOLDER_TITLE
 from .ats import USER_AGENT, clean, from_iso, guess_work_mode, html_to_text
+from .justjoinit import touch_postings
 
 log = logging.getLogger(__name__)
 
@@ -64,9 +67,14 @@ class FeedCollector:
         self._client = client
         self.delay = delay_seconds
         self._requests = 0
+        self._gone: set[str] = set()
 
     def incomplete_company_ids(self) -> set[int]:
         return set()
+
+    def gone_external_ids(self) -> set[str]:
+        """Postings found to have gone in the last run, to close straight away."""
+        return set(self._gone)
 
     def get(self, client: httpx.Client, url: str, **params: Any) -> httpx.Response:
         if self._requests:
@@ -81,14 +89,19 @@ class FeedCollector:
             timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True
         )
         self._requests = 0
+        self._gone = set()
         try:
             yield from self.postings(client)
+            self.recheck(conn, client)
         finally:
             if self._client is None:
                 client.close()
 
     def postings(self, client: httpx.Client) -> Iterator[RawPosting]:
         raise NotImplementedError
+
+    def recheck(self, conn: psycopg.Connection, client: httpx.Client) -> None:
+        """After a successful pass, look again at open postings the feed no longer showed."""
 
 
 class HimalayasCollector(FeedCollector):
@@ -105,16 +118,21 @@ class HimalayasCollector(FeedCollector):
     _PERIODS = {"annual": "year", "yearly": "year", "monthly": "month", "hourly": "hour",
                 "daily": "day"}
 
-    def __init__(self, *args, queries=None, max_pages=None, **kwargs) -> None:
+    def __init__(self, *args, queries=None, max_pages=None, max_checks=None, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         env = os.environ.get("HIMALAYAS_QUERIES")
         self.queries = queries or (
             tuple(q.strip() for q in env.split(",") if q.strip()) if env else self.default_queries
         )
         self.max_pages = max_pages or int(os.environ.get("HIMALAYAS_MAX_PAGES", "5"))
+        self.max_checks = (
+            max_checks if max_checks is not None
+            else int(os.environ.get("HIMALAYAS_MAX_CHECKS", "40"))
+        )
+        self._seen: set[str] = set()
 
     def postings(self, client: httpx.Client) -> Iterator[RawPosting]:
-        seen: set[str] = set()
+        seen = self._seen = set()
         for query in self.queries:
             for page in range(1, self.max_pages + 1):
                 jobs = self.get(client, self.url, q=query, country="Poland", page=page).json()
@@ -125,6 +143,62 @@ class HimalayasCollector(FeedCollector):
                         yield self.parse(job)
                 if len(jobs) < 20:
                     break
+
+    def recheck(self, conn: psycopg.Connection, client: httpx.Client) -> None:
+        """Look up the open postings the role searches did not return, by searching for their
+        company (the advert pages themselves sit behind a Cloudflare bot challenge). Companies
+        with jobs James is interested in or applied for go first, then those confirmed longest
+        ago, up to max_checks searches per run. An advert still in its company's results counts
+        as seen, so it stays open however far down the role searches it has slipped. One
+        missing from a complete set of results has gone, and the runner closes it without
+        waiting out stale_after_days. If the company's results run past max_pages, or the
+        search fails, nothing is decided for it this run."""
+        if conn is None or self.max_checks <= 0:
+            return  # e.g. check_feeds, which runs collectors without a database
+        rows = conn.execute(
+            """
+            SELECT p.raw ->> 'companyName' AS company,
+                   array_agg(p.external_id) AS ids,
+                   bool_or(r.decision IN ('interested', 'applied')) IS TRUE AS tracked,
+                   min(p.last_seen_at) AS oldest
+            FROM postings p
+            JOIN sources s ON s.id = p.source_id
+            LEFT JOIN job_reviews r ON r.job_id = p.job_id
+            WHERE s.key = %s AND p.closed_at IS NULL AND NOT p.external_id = ANY(%s)
+              AND p.raw ->> 'companyName' IS NOT NULL
+            GROUP BY 1
+            ORDER BY tracked DESC, oldest
+            LIMIT %s
+            """,
+            (self.source_key, list(self._seen), self.max_checks),
+        ).fetchall()
+        live: list[str] = []
+        for company, ids, _, _ in rows:
+            listed = self.company_guids(client, company)
+            if listed is None:
+                continue
+            live += [i for i in ids if i in listed]
+            self._gone.update(i for i in ids if i not in listed)
+        touch_postings(conn, self.source_key, live)
+        if rows:
+            log.info("himalayas: looked up %d companies' missing adverts, %d listed, %d gone",
+                     len(rows), len(live), len(self._gone))
+
+    def company_guids(self, client: httpx.Client, company: str) -> set[str] | None:
+        """Every advert of this company the search returns (open to people in Poland, as the
+        role searches are), or None if that can't be known this run. A search that finds no
+        advert of the company at all says nothing: the name may simply not match its listing."""
+        guids: set[str] = set()
+        try:
+            for page in range(1, self.max_pages + 1):
+                jobs = self.get(client, self.url, q=company, country="Poland", page=page).json()
+                jobs = jobs.get("jobs") or []
+                guids.update(j["guid"] for j in jobs if j.get("companyName") == company)
+                if len(jobs) < 20:
+                    return guids or None
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            log.warning("himalayas: could not look up %s: %r", company, exc)
+        return None
 
     def parse(self, job: dict[str, Any]) -> RawPosting:
         restrictions = job.get("locationRestrictions") or []
