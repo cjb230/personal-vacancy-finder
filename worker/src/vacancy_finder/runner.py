@@ -6,7 +6,15 @@ from datetime import timedelta
 import psycopg
 
 from .collectors import Collector
-from .store import close_unseen, confirm_tracked_jobs, ensure_source, upsert_posting
+from .store import (
+    close_expired_unseen,
+    close_postings_by_url,
+    close_unseen,
+    confirm_tracked_jobs,
+    ensure_source,
+    missing_tracked_urls,
+    upsert_posting,
+)
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +39,13 @@ def run_collector(conn: psycopg.Connection, collector: Collector) -> None:
         # Feeds that only show the latest N jobs close a posting after it has been
         # missing for a while, rather than on its first absence.
         stale_days = getattr(collector, "stale_after_days", 0)
+        if stale_days:
+            # Absence from such a feed proves nothing, but a passed expiry date does, and
+            # tracked jobs' advert pages can be checked one by one where the collector can.
+            close_expired_unseen(conn, source_id, started_at)
+            if hasattr(collector, "gone_adverts") and (
+                    missing := missing_tracked_urls(conn, source_id, started_at)):
+                close_postings_by_url(conn, source_id, collector.gone_adverts(missing))
         closed = close_unseen(
             conn,
             source_id,

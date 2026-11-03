@@ -201,6 +201,51 @@ def fill_deadlines(conn: psycopg.Connection) -> int:
     return len(found)
 
 
+# Jobs worth re-checking one by one when a search feed stops listing them: the ones on the
+# Matches, Interested and Applied tabs.
+TRACKED_JOB = """(EXISTS (SELECT 1 FROM job_reviews r WHERE r.job_id = p.job_id
+                          AND r.decision IN ('interested', 'applied'))
+     OR (NOT EXISTS (SELECT 1 FROM job_reviews r WHERE r.job_id = p.job_id)
+         AND EXISTS (SELECT 1 FROM job_scores s WHERE s.job_id = p.job_id
+                     AND s.verdict = 'match')))"""
+
+
+def close_expired_unseen(conn: psycopg.Connection, source_id: int, seen_since: datetime) -> int:
+    """Close this source's postings missing from this run whose advert has passed the expiry
+    date the source gave, without waiting out the source's stale window."""
+    return conn.execute(
+        """
+        UPDATE postings SET closed_at = now()
+        WHERE source_id = %s AND closed_at IS NULL AND last_seen_at < %s
+          AND closes_kind = 'expiry' AND closes_at < now()
+        """,
+        (source_id, seen_since),
+    ).rowcount
+
+
+def missing_tracked_urls(conn: psycopg.Connection, source_id: int, seen_since: datetime,
+                         limit: int = 50) -> list[str]:
+    """Advert urls of this source's open postings for tracked jobs that this run did not see,
+    least recently seen first."""
+    rows = conn.execute(
+        f"""
+        SELECT p.url FROM postings p
+        WHERE p.source_id = %s AND p.closed_at IS NULL AND p.last_seen_at < %s AND {TRACKED_JOB}
+        ORDER BY p.last_seen_at LIMIT %s
+        """,
+        (source_id, seen_since, limit),
+    ).fetchall()
+    return [url for (url,) in rows]
+
+
+def close_postings_by_url(conn: psycopg.Connection, source_id: int, urls: set[str]) -> int:
+    return conn.execute(
+        "UPDATE postings SET closed_at = now() "
+        "WHERE source_id = %s AND closed_at IS NULL AND url = ANY(%s)",
+        (source_id, list(urls)),
+    ).rowcount
+
+
 def confirm_tracked_jobs(conn: psycopg.Connection) -> tuple[int, int]:
     """Re-check the jobs James is interested in or has applied for against the sources that
     list every current advert (see the job_confirmation view; email alerts can't say an advert

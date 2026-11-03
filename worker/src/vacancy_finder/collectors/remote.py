@@ -76,10 +76,12 @@ class FeedCollector:
         response.raise_for_status()
         return response
 
+    def new_client(self, follow_redirects: bool = True) -> httpx.Client:
+        return httpx.Client(timeout=30, headers={"User-Agent": USER_AGENT},
+                            follow_redirects=follow_redirects)
+
     def collect(self, conn: psycopg.Connection) -> Iterator[RawPosting]:
-        client = self._client or httpx.Client(
-            timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True
-        )
+        client = self._client or self.new_client()
         self._requests = 0
         try:
             yield from self.postings(client)
@@ -125,6 +127,34 @@ class HimalayasCollector(FeedCollector):
                         yield self.parse(job)
                 if len(jobs) < 20:
                     break
+
+    def gone_adverts(self, urls: list[str]) -> set[str]:
+        """Of these advert pages (missing from today's searches, which only reach the top
+        results), the ones Himalayas no longer has: not found, or redirected elsewhere, such as
+        to the company's page. Anything else, including errors, counts as still there."""
+        client = self._client or self.new_client(follow_redirects=False)
+        gone = set()
+        try:
+            for url in urls:
+                try:
+                    response = self.check(client, url)
+                except httpx.HTTPError as exc:
+                    log.info("himalayas: could not check %s: %r", url, exc)
+                    continue
+                moved = response.is_redirect and httpx.URL(url).join(
+                    response.headers.get("location", "")).path.rstrip("/") != httpx.URL(url).path.rstrip("/")
+                if response.status_code in (404, 410) or moved:
+                    gone.add(url)
+        finally:
+            if self._client is None:
+                client.close()
+        return gone
+
+    def check(self, client: httpx.Client, url: str) -> httpx.Response:
+        if self._requests:
+            time.sleep(self.delay)
+        self._requests += 1
+        return client.get(url, follow_redirects=False)
 
     def parse(self, job: dict[str, Any]) -> RawPosting:
         restrictions = job.get("locationRestrictions") or []

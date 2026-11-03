@@ -290,3 +290,22 @@ def test_hn_salary(line, expected):
     else:
         assert (salary["salary_min"], salary["salary_max"], salary["salary_currency"]) == (
             Decimal(expected[0]), Decimal(expected[1]), expected[2])
+
+
+def test_himalayas_gone_adverts():
+    base = "https://himalayas.app/companies/acme/jobs/"
+    answers = {
+        "gone": httpx.Response(404),
+        "moved": httpx.Response(301, headers={"location": "/companies/acme"}),
+        "slash": httpx.Response(308, headers={"location": base + "slash/"}),
+        "here": httpx.Response(200, text="<h1>Staff Engineer</h1>"),
+        "error": httpx.Response(503),
+    }
+
+    def handler(request):
+        return answers[request.url.path.rstrip("/").rsplit("/", 1)[-1]]
+
+    collector = HimalayasCollector(httpx.Client(transport=httpx.MockTransport(handler)),
+                                   delay_seconds=0)
+    urls = [base + name for name in answers]
+    assert collector.gone_adverts(urls) == {base + "gone", base + "moved"}

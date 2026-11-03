@@ -238,3 +238,29 @@ def test_failed_check_confirms_nothing_away(conn):
 
     run_collector(conn, Partial("board_a", []))
     assert reviewed(conn) == ("interested", False)
+
+
+def test_search_feed_rechecks_missing_tracked_jobs_and_expiry(conn):
+    from datetime import UTC, datetime, timedelta
+
+    class Search(FakeCollector):
+        stale_after_days = 21
+        asked = []
+
+        def gone_adverts(self, urls):
+            Search.asked += urls
+            return {u for u in urls if u.endswith("/2")}
+
+    expired = posting("3", title="Head of Data")
+    expired.closes_at, expired.closes_kind = datetime.now(UTC) - timedelta(hours=1), "expiry"
+    run_collector(conn, Search("feed", [posting("1"), posting("2", title="Engineering Manager"),
+                                        expired]))
+    conn.execute("INSERT INTO job_reviews (job_id, decision) "
+                 "SELECT job_id, 'interested' FROM postings WHERE external_id IN ('1', '2')")
+    conn.commit()
+
+    run_collector(conn, Search("feed", []))
+    open_ids = {r[0] for r in conn.execute("SELECT external_id FROM postings WHERE closed_at IS NULL")}
+    assert open_ids == {"1"}  # 2's page is gone, 3 expired; 1 is only missing from the search
+    assert sorted(Search.asked) == ["https://example.com/1", "https://example.com/2"]
+    assert conn.execute("SELECT count(*) FROM job_reviews WHERE decision = 'missed'").fetchone()[0] == 1
