@@ -289,3 +289,10 @@ def test_hacker_news_bonus():
     hn = score_job(job("Staff Python Engineer", sources=("hn-whoishiring",)))
     assert hn.score == plain.score + 10
     assert "found on Hacker News (+10)" in hn.reasons
+
+
+def test_hn_staff_engineer_counts_as_software():
+    title = "Staff Engineers (Elixir)"
+    assert score_job(job(title, pay=Decimal(48000))).verdict == "maybe"
+    hn = score_job(job(title, pay=Decimal(48000), sources=("hn-whoishiring",)))
+    assert hn.verdict == "match"

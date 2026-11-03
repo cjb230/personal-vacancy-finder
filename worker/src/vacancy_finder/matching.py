@@ -166,6 +166,8 @@ US_CITIZENS = _rx(
 )
 HN_SOURCE = "hn-whoishiring"
 HN_BONUS = 10
+# On Hacker News a "Staff Engineer" title is software work (James, 2026-11-03).
+HN_STAFF_ENGINEER = _rx(r"\bstaff engineers?\b")
 
 # Single European countries other than Poland: remote "within Spain" usually means living there.
 OTHER_EU_COUNTRY = _rx(
@@ -456,7 +458,8 @@ def score_job(job: JobFacts) -> Score:
     elif verdict == "match" and not senior_enough:
         verdict = "maybe"
         reasons.append(f"{role_level}-level: at most a maybe")
-    elif verdict == "match" and not SOFTWARE.search(role_title):
+    elif verdict == "match" and not (SOFTWARE.search(role_title) or (
+            HN_SOURCE in job.sources and HN_STAFF_ENGINEER.search(role_title))):
         verdict = "maybe"
         reasons.append("not clearly software work: at most a maybe")
     return Score(verdict, points, role_level, reasons)
