@@ -99,6 +99,17 @@ def test_filters_by_first_seen_and_score(conn, monkeypatch):  # noqa: F811
     recent = web.render("match", "", 0, seen="24")
     assert "Engineering Manager" in recent and "Staff Python Engineer" not in recent
     assert "Matches (1)" in recent and "seen=24" in recent  # tabs keep the filter
+    # The period chips: the chosen one lit, each a one-click link that keeps the other filters.
+    chips = recent.split('class="chips seen"')[1].split("</nav>")[0]
+    assert chips.count('aria-current="true"') == 1
+    assert 'class="on" aria-current="true" href="/?view=match&q=&seen=24">Last 24 hours' in chips
+    assert 'href="/?view=match&q=&seen=72">Last 3 days' in chips
+    assert 'href="/?view=match&q=">Any time' in chips
+    assert 'name="seen" value="24"' in recent  # the filters form carries the period
+    page = web.render("match", "", 0, since="2026-01-10T10:00", min_score="5")
+    chips = page.split('class="chips seen"')[1].split("</nav>")[0]
+    assert 'aria-current="true"' not in chips  # a "since" time isn't "Any time"
+    assert 'href="/?view=match&q=&min_score=5&seen=168">Last 7 days' in chips  # drops since
     since = web.render("match", "", 0, since="2026-01-10T10:00")  # Warsaw, so 09:00 UTC
     assert "Staff Python Engineer" in since
     assert "Staff Python Engineer" not in web.render("match", "", 0, since="2026-01-10T11:00")
