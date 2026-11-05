@@ -1,8 +1,9 @@
 """A small results page: open jobs ranked by how well they match, with buttons to mark each
 one interested, not interested or applied, and feedback notes (reject for, rate higher or
 lower for, score higher or lower) kept with a snapshot of the ad for tuning later. Filters
-narrow every tab to jobs first seen recently (or since a given time), above a minimum score,
-or closing soon, sorted by score, newest first or closing soonest. Three toggles show or hide
+narrow every tab to jobs first seen recently (one click on a period chip, or since a given
+time), above a minimum score, or closing soon, sorted by score, newest first or closing
+soonest. Three toggles show or hide
 staff, manager and director-level roles (all shown by default). A box in the top right shows
 when each source was last checked, and whether that check failed. Marking a job applied asks
 for when (default now) and the folder holding the application, both shown on the job. Matches,
@@ -154,8 +155,8 @@ h1 { font-size:20px; margin:0 0 10px; }
 nav a { display:inline-block; margin:0 6px 8px 0; padding:4px 10px; border-radius:14px;
         background:var(--chip); color:var(--fg); text-decoration:none; font-size:14px; }
 nav a.on { background:var(--accent); color:#fff; }
-nav.roles { font-size:14px; color:var(--muted); } nav.roles span { margin-right:8px; }
-nav.roles a { font-size:13px; padding:2px 10px; }
+nav.chips { font-size:14px; color:var(--muted); } nav.chips span { margin-right:8px; }
+nav.chips a { font-size:13px; padding:2px 10px; }
 form.search { display:inline; } form.search input { padding:4px 8px; border:1px solid var(--line);
   border-radius:6px; background:var(--bg); color:var(--fg); }
 form.filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 8px;
@@ -326,7 +327,8 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
 <header>{render_checked(checked, now)}<h1>Vacancy finder</h1><nav>{tabs}
 <form class="search" method="get"><input type="hidden" name="view" value="{esc(view)}">
 {hidden(keep)}<input name="q" value="{esc(q)}" placeholder="Search title or company"></form></nav>
-{render_filters(view, q, seen, since, min_score, sort, closes, hide)}{render_role_toggles(view, q, keep, hidden_levels)}</header>
+{render_filters(view, q, seen, since, min_score, sort, closes, hide)}{render_seen_chips(view, q, keep, seen, since)}
+{render_role_toggles(view, q, keep, hidden_levels)}</header>
 <main><h2 style="font-size:16px">{esc(title)}</h2>{body}{pager}</main></body></html>"""
 
 
@@ -428,7 +430,22 @@ def render_role_toggles(view: str, q: str, keep: dict, hidden_levels: list[str])
         chips.append(f'<a class="{"on" if shown else ""}" role="switch" aria-checked="{str(shown).lower()}" '
                      f'title="{esc(title)}" href="/?{urlencode({"view": view, "q": q, **params})}">'
                      f'{"✓ " if shown else ""}{esc(label)}</a>')
-    return f'<nav class="roles"><span>Roles</span>{"".join(chips)}</nav>'
+    return f'<nav class="chips roles"><span>Roles</span>{"".join(chips)}</nav>'
+
+
+def render_seen_chips(view: str, q: str, keep: dict, seen: str, since: str) -> str:
+    """One chip per first-seen period (SEEN_WITHIN), the chosen one highlighted. A click
+    picks that period and drops any "since" time; each chip is a link, so the period is kept
+    in the page address as seen=, like the other filters."""
+    chips = []
+    for key, label in SEEN_WITHIN.items():
+        on = key == seen and bool(key or not since)  # "Any time" is not lit while "since" is set
+        params = {k: v for k, v in keep.items() if k not in ("seen", "since")}
+        if key:
+            params["seen"] = key
+        chips.append(f'<a class="{"on" if on else ""}" aria-current="{str(on).lower()}" '
+                     f'href="/?{urlencode({"view": view, "q": q, **params})}">{esc(label)}</a>')
+    return f'<nav class="chips seen"><span>First seen</span>{"".join(chips)}</nav>'
 
 
 def render_filters(view: str, q: str, seen: str, since: str, min_score: str, sort: str,
@@ -439,9 +456,10 @@ def render_filters(view: str, q: str, seen: str, since: str, min_score: str, sor
     # Clearing leaves the role toggles alone: they have their own on/off chips.
     clear = (f' <a href="/?{urlencode({"view": view, "q": q, **({"hide": hide} if hide else {})})}">Clear filters</a>'
              if seen or since or min_score or closes or sort != "score" else "")
-    return f"""<form class="filters" method="get">{hidden({"view": view, "q": q, **({"hide": hide} if hide else {})})}
-<label>First seen <select name="seen">{options(SEEN_WITHIN, seen)}</select></label>
-<label>or since <input type="datetime-local" name="since" value="{esc(since)}"></label>
+    # The first-seen period is picked with the chips below; the form carries it along.
+    carried = {"view": view, "q": q, **({"seen": seen} if seen else {}), **({"hide": hide} if hide else {})}
+    return f"""<form class="filters" method="get">{hidden(carried)}
+<label>First seen since <input type="datetime-local" name="since" value="{esc(since)}"></label>
 <label>Min score <input type="number" name="min_score" value="{esc(min_score)}"></label>
 <label>Closing <select name="closes">{options(CLOSES, closes)}</select></label>
 <label>Sort <select name="sort">{options({k: label for k, (label, _) in SORTS.items()}, sort)}</select></label>
