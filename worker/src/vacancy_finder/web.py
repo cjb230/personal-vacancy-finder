@@ -16,6 +16,7 @@ Run on its own with: python -m vacancy_finder.web
 import html
 import logging
 import os
+import re
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -171,6 +172,7 @@ main { padding:8px 20px 40px; max-width:1100px; }
 .match .score { color:var(--good); } .maybe .score { color:var(--warn); } .no .score { color:var(--bad); }
 .title a { color:var(--accent); font-weight:600; text-decoration:none; }
 .meta { color:var(--muted); font-size:13px; margin:2px 0 4px 46px; }
+.meta .places { cursor:help; text-decoration:underline dotted; }
 .meta .soon, .meta .gone { color:var(--bad); font-weight:600; }
 .reasons { margin:0 0 6px 46px; font-size:13px; }
 .reasons span { display:inline-block; background:var(--chip); border-radius:10px; padding:1px 8px;
@@ -305,7 +307,7 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
   <div class="top"><span class="score">{score}</span>
     <span class="title"><a href="{esc(url)}" target="_blank" rel="noopener">{esc(job_title)}</a></span>
     <span>{esc(company)}</span></div>
-  <div class="meta">{esc(locations or "location not given")} · {esc(sources)} ·
+  <div class="meta">{render_locations(locations)} · {esc(sources)} ·
     first seen {first_seen:%d %b %H:%M}{render_closing(closes_at, is_deadline, closed_already)}{
     render_confirmed(checkable, confirmed_at, ad_gone_at, last_seen) if view in CONFIRMED_VIEWS else ""}</div>
   <div class="reasons">{chips}</div>
@@ -357,6 +359,51 @@ def render_checked(rows: list[tuple], now: datetime) -> str:
         summary += f' · <span class="failed">{failed} failed</span>'
     return (f'<details class="checked"><summary>{summary}</summary>'
             f'<table>{"".join(lines)}</table></details>')
+
+
+# A job's locations longer than this would push its detail line onto a second line, so they
+# are shortened to the Polish and UK places, with the full list on hover.
+MAX_LOCATIONS_CHARS = 60
+LOCATION_SPLIT = re.compile(r"\s*(?:\||;|,|/|·|\n)\s*")
+# Places James cares about: Poland and the UK, by country and main cities.
+HOME_PLACES = re.compile(
+    r"\b(poland|polska|warsaw|warszawa|krak[oó]w|cracow|wroc[lł]aw|gda[nń]sk|gdynia|sopot|"
+    r"pozna[nń]|[lł][oó]d[zź]|katowice|szczecin|lublin|bydgoszcz|bia[lł]ystok|rzesz[oó]w|"
+    r"uk|u\.k\.|united kingdom|great britain|britain|england|scotland|wales|northern ireland|"
+    r"london|manchester|edinburgh|glasgow|bristol|birmingham|leeds|cambridge|oxford|belfast|"
+    r"cardiff|liverpool|newcastle|sheffield|nottingham|reading|brighton)\b", re.IGNORECASE)
+
+HOME_COUNTRIES = re.compile(
+    r"poland|polska|uk|u\.k\.|united kingdom|great britain|britain|england|scotland|wales|"
+    r"northern ireland", re.IGNORECASE)
+
+
+def render_locations(locations: str | None) -> str:
+    """A job's locations for its detail line. A long list is cut to the Polish and UK places
+    in it ("Warsaw, London + other locations"), or "Many locations" if there are none, with
+    the whole list shown on hover."""
+    if not locations:
+        return "location not given"
+    if len(locations) <= MAX_LOCATIONS_CHARS:
+        return esc(locations)
+    places = list(dict.fromkeys(p for p in LOCATION_SPLIT.split(locations) if p))
+    home = [p for p in places if HOME_PLACES.search(p)]
+    # "Warsaw, Poland | Kraków, Poland" reads as "Warsaw, Kraków": drop bare country names
+    # when a city says it anyway.
+    cities = [p for p in home if not HOME_COUNTRIES.fullmatch(p)]
+    home = cities or home
+    shown: list[str] = []
+    for place in home:
+        if len(", ".join(shown + [place])) > MAX_LOCATIONS_CHARS - 20:
+            break
+        shown.append(place)
+    if not shown:
+        short = "Many locations"
+    elif len(shown) == len(places):
+        short = ", ".join(shown)
+    else:
+        short = ", ".join(shown) + " + other locations"
+    return f'<span class="places" title="{esc(locations)}">{esc(short)}</span>'
 
 
 def render_closing(closes_at: datetime | None, is_deadline: bool, passed: bool) -> str:
