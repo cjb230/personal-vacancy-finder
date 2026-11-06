@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timedelta
@@ -29,7 +30,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 
 from .capture import bookmarklet, save_capture
-from .matching import score_all
+from .matching import score_jobs
 
 log = logging.getLogger(__name__)
 
@@ -676,19 +677,25 @@ paste it below instead.</p>
 def capture(form: dict[str, list[str]]) -> tuple[HTTPStatus, str]:
     """Save a capture and rescore. Returns the result page."""
     field = lambda name: form.get(name, [""])[0]  # noqa: E731
+    started = time.monotonic()
     try:
         with connect() as conn:
-            _, jobs = save_capture(conn, field("url"), field("description"),
-                                   field("title"), field("company"))
+            key, jobs = save_capture(conn, field("url"), field("description"),
+                                     field("title"), field("company"))
             conn.commit()
             if jobs:
-                score_all(conn)
+                score_jobs(conn, [job_id for job_id, _ in jobs])
                 scores = dict(conn.execute(
                     "SELECT job_id, verdict || ' (' || score || ')' FROM job_scores "
                     "WHERE job_id = ANY(%s)", ([job_id for job_id, _ in jobs],)).fetchall())
     except ValueError as exc:
+        log.info("Capture refused: %s", exc)
         return HTTPStatus.BAD_REQUEST, page("Not captured", f"<h2>Not captured</h2><p>{esc(exc)}</p>"
                                         '<p><a href="/capture">Back</a></p>')
+    log.info("Captured %s (%d characters) in %.1fs: %s", key, len(field("description")),
+             time.monotonic() - started,
+             ", ".join(f"job {job_id} now {scores.get(job_id)}" for job_id, _ in jobs)
+             or "not in an alert yet")
     if jobs:
         found = "".join(
             f'<li><a href="/?{urlencode({"view": "match", "q": title[:100]})}">{esc(title)}</a>: '
