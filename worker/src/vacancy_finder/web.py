@@ -8,7 +8,8 @@ staff, manager and director-level roles (all shown by default). A box in the top
 when each source was last checked, and whether that check failed. Marking a job applied asks
 for when (default now) and the folder holding the application, both shown on the job. Matches,
 Interested, Applied and Missed jobs show when a source last confirmed their advert, or that it
-has gone; interested jobs whose adverts go move to Missed. Served by the worker on WEB_PORT (8080), which
+has gone; interested jobs whose adverts go move to Missed. /capture installs a bookmarklet that
+sends the description of a LinkedIn job open in James's browser (see capture.py). Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -26,6 +27,9 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 import psycopg
+
+from .capture import bookmarklet, save_capture
+from .matching import score_all
 
 log = logging.getLogger(__name__)
 
@@ -158,6 +162,12 @@ nav a { display:inline-block; margin:0 6px 8px 0; padding:4px 10px; border-radiu
 nav a.on { background:var(--accent); color:#fff; }
 nav.chips { font-size:14px; color:var(--muted); } nav.chips span { margin-right:8px; }
 nav.chips a { font-size:13px; padding:2px 10px; }
+main.capture { max-width:720px; } main.capture label { display:block; margin:8px 0; }
+main.capture input, main.capture textarea { display:block; width:100%; box-sizing:border-box;
+  font:inherit; padding:4px 8px; border:1px solid var(--line); border-radius:6px;
+  background:var(--bg); color:var(--fg); }
+a.bookmarklet { display:inline-block; padding:2px 10px; border:1px solid var(--accent);
+  border-radius:12px; }
 form.search { display:inline; } form.search input { padding:4px 8px; border:1px solid var(--line);
   border-radius:6px; background:var(--bg); color:var(--fg); }
 form.filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 8px;
@@ -328,7 +338,8 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
 <title>Vacancy finder</title><style>{STYLE}</style><script>{SCRIPT}</script></head><body>
 <header>{render_checked(checked, now)}<h1>Vacancy finder</h1><nav>{tabs}
 <form class="search" method="get"><input type="hidden" name="view" value="{esc(view)}">
-{hidden(keep)}<input name="q" value="{esc(q)}" placeholder="Search title or company"></form></nav>
+{hidden(keep)}<input name="q" value="{esc(q)}" placeholder="Search title or company"></form>
+<a href="/capture" title="Send LinkedIn job descriptions from your browser">Capture</a></nav>
 {render_filters(view, q, seen, since, min_score, sort, closes, hide)}{render_seen_chips(view, q, keep, seen, since)}
 {render_role_toggles(view, q, keep, hidden_levels)}</header>
 <main><h2 style="font-size:16px">{esc(title)}</h2>{body}{pager}</main></body></html>"""
@@ -617,9 +628,89 @@ def save_review(job_id: int, decision: str, applied_at: datetime | None = None,
             conn.execute("DELETE FROM job_reviews WHERE job_id = %s", (job_id,))
 
 
+_HOST = re.compile(r"^[A-Za-z0-9.\-]+(:\d+)?$|^\[[0-9A-Fa-f:]+\](:\d+)?$")
+
+
+def page(title: str, body: str) -> str:
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{esc(title)}</title><style>{STYLE}</style></head><body>
+<header><h1><a href="/" style="color:inherit;text-decoration:none">Vacancy finder</a></h1></header>
+<main class="capture">{body}</main></body></html>"""
+
+
+def render_capture(origin: str, message: str = "") -> str:
+    """How to install the Capture bookmarklet, a box to paste a description by hand when the
+    bookmarklet can't reach this page, and the latest captures."""
+    with connect() as conn:
+        recent = conn.execute(
+            """
+            SELECT pc.captured_at AT TIME ZONE %s, pc.url, coalesce(pc.title, pc.url), pc.company,
+                   EXISTS (SELECT 1 FROM postings p WHERE p.external_id = pc.external_id)
+            FROM page_captures pc ORDER BY pc.captured_at DESC LIMIT 20
+            """,
+            (DISPLAY_TZ,),
+        ).fetchall()
+    rows = "".join(
+        f'<li>{at:%d %b %H:%M} <a href="{esc(url)}" target="_blank" rel="noopener">{esc(title)}</a>'
+        f'{" · " + esc(company) if company else ""}{"" if known else " · not in an alert yet"}</li>'
+        for at, url, title, company, known in recent
+    ) or "<li>None yet.</li>"
+    return page("Capture LinkedIn adverts", f"""
+{message}
+<h2>Capture LinkedIn adverts</h2>
+<p>LinkedIn alerts carry no job description, and we don't fetch LinkedIn pages ourselves. When
+you have a LinkedIn job open in your browser, click the bookmarklet and it sends that page's
+description here; the job is then rescored with it.</p>
+<p>Drag this to your bookmarks bar: <a class="bookmarklet" href="{esc(bookmarklet(origin))}">Capture</a></p>
+<p>It reads only the page you have open. If it can't find the description, select the text on
+the page and click it again. If your browser won't send it (a blocked or "not secure" form),
+paste it below instead.</p>
+<form method="post" action="/capture">
+  <label>LinkedIn job URL <input name="url" required placeholder="https://www.linkedin.com/jobs/view/..."></label>
+  <label>Description <textarea name="description" rows="10" required></textarea></label>
+  <button>Save</button></form>
+<h3>Latest captures</h3><ul>{rows}</ul>""")
+
+
+def capture(form: dict[str, list[str]]) -> tuple[HTTPStatus, str]:
+    """Save a capture and rescore. Returns the result page."""
+    field = lambda name: form.get(name, [""])[0]  # noqa: E731
+    try:
+        with connect() as conn:
+            _, jobs = save_capture(conn, field("url"), field("description"),
+                                   field("title"), field("company"))
+            conn.commit()
+            if jobs:
+                score_all(conn)
+                scores = dict(conn.execute(
+                    "SELECT job_id, verdict || ' (' || score || ')' FROM job_scores "
+                    "WHERE job_id = ANY(%s)", ([job_id for job_id, _ in jobs],)).fetchall())
+    except ValueError as exc:
+        return HTTPStatus.BAD_REQUEST, page("Not captured", f"<h2>Not captured</h2><p>{esc(exc)}</p>"
+                                        '<p><a href="/capture">Back</a></p>')
+    if jobs:
+        found = "".join(
+            f'<li><a href="/?{urlencode({"view": "match", "q": title[:100]})}">{esc(title)}</a>: '
+            f'now {esc(scores.get(job_id, "unscored"))}</li>' for job_id, title in jobs)
+        what = f"<p>Saved and rescored:</p><ul>{found}</ul>"
+    else:
+        what = ("<p>Saved. This job hasn't come in a LinkedIn alert yet; the text will be used "
+                "when it does.</p>")
+    return HTTPStatus.OK, page("Captured", f"""<h2>Captured {esc(field("title") or "")}</h2>
+{what}<p>You can close this tab. <a href="/capture">Latest captures</a></p>""")
+
+
 class Handler(BaseHTTPRequestHandler):
+    def origin(self) -> str:
+        host = self.headers.get("Host") or ""
+        return f"http://{host}" if _HOST.match(host) else "http://localhost:8090"
+
     def do_GET(self) -> None:
         url = urlparse(self.path)
+        if url.path == "/capture":
+            self._send(HTTPStatus.OK, render_capture(self.origin()))
+            return
         if url.path != "/":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -636,6 +727,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/capture":
+            length = min(int(self.headers.get("Content-Length") or 0), 400_000)
+            self._send(*capture(parse_qs(self.rfile.read(length).decode(errors="replace"))))
+            return
         if path not in ("/review", "/feedback", "/feedback/delete"):
             self.send_error(HTTPStatus.NOT_FOUND)
             return

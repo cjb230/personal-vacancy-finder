@@ -27,6 +27,8 @@ from typing import Any
 
 import psycopg
 
+from .normalize import normalize_company, normalize_title
+
 log = logging.getLogger(__name__)
 
 MATCH = 45
@@ -280,6 +282,7 @@ class JobFacts:
     contract_types: set[str] = field(default_factory=set)
     sources: set[str] = field(default_factory=set)
     take_home_max: Decimal | None = None  # monthly take-home in PLN, best of the postings
+    twin_title: str | None = None  # the job whose advert text this one borrowed, if any
 
 
 @dataclass
@@ -444,6 +447,8 @@ def score_job(job: JobFacts) -> Score:
 
     if not text:
         reasons.append("no description collected: check the advert")
+    elif job.twin_title:
+        reasons.append(f"advert text taken from the same job listed as \"{job.twin_title}\"")
 
     if blockers:
         return Score("no", points, role_level, blockers + reasons)
@@ -495,12 +500,15 @@ def load_facts(conn: psycopg.Connection) -> list[JobFacts]:
     rows = conn.execute(
         """
         SELECT j.id, j.title, c.name, COALESCE(c.sectors, '{}'), COALESCE(c.excluded, false),
-               p.work_mode, p.location_text, p.description, p.language, p.contract_type,
+               p.work_mode, p.location_text, COALESCE(p.description, pc.description),
+               COALESCE(p.language, pc.language), p.contract_type,
                p.salary_max, p.salary_min, p.salary_currency, p.salary_period, p.raw, s.key
         FROM jobs j
         JOIN postings p ON p.job_id = j.id AND p.closed_at IS NULL
         JOIN sources s ON s.id = p.source_id
         LEFT JOIN companies c ON c.id = j.company_id
+        -- Text James sent from the job's page (capture.py), for alerts that carry none.
+        LEFT JOIN page_captures pc ON pc.external_id = p.external_id AND s.kind = 'email'
         WHERE j.status = 'open'
         ORDER BY j.id
         """
@@ -526,7 +534,64 @@ def load_facts(conn: psycopg.Connection) -> list[JobFacts]:
             pay = take_home(pay, contract)
             if job.take_home_max is None or pay > job.take_home_max:
                 job.take_home_max = pay
-    return list(facts.values())
+    jobs = list(facts.values())
+    borrow_twin_descriptions(jobs)
+    return jobs
+
+
+# Seniority words that must agree for two titles to be the same job.
+_LEVEL_WORDS = {"intern", "junior", "jr", "mid", "senior", "sr", "staff", "principal", "lead",
+                "head", "director", "manager", "vp", "chief", "associate", "distinguished"}
+_TITLE_SYNONYMS = {"sr": "senior", "jr": "junior", "mgr": "manager", "eng": "engineering"}
+TWIN_SIMILARITY = 0.75  # share of title words in common (Jaccard), e.g. 3 of 4
+
+
+def _title_words(title: str) -> set[str]:
+    return {_TITLE_SYNONYMS.get(w, w) for w in normalize_title(title).split()}
+
+
+def title_similarity(a: str, b: str) -> float:
+    """0 to 1. Titles at different levels ("Senior" vs "Staff") are never similar."""
+    wa, wb = _title_words(a), _title_words(b)
+    if not wa or not wb or wa & _LEVEL_WORDS != wb & _LEVEL_WORDS:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)
+
+
+def borrow_twin_descriptions(jobs: list[JobFacts]) -> int:
+    """Jobs with no advert text (mostly LinkedIn alerts) take the text of the same job on the
+    company's own board or another site, when the titles differ too much for the fingerprint
+    to merge them ("Sr. Backend Engineer, Python" vs "Senior Backend Engineer (Python)"). One
+    best match at the same company counts; a tie between two jobs is left alone. The jobs are
+    not merged, since the next alert would split them again; this repeats on every scoring.
+    Returns how many jobs borrowed."""
+    by_company: dict[str, list[JobFacts]] = defaultdict(list)
+    for job in jobs:
+        if job.descriptions and job.company:
+            by_company[normalize_company(job.company)].append(job)
+    borrowed = 0
+    for job in jobs:
+        if job.descriptions or not job.company:
+            continue
+        scored = sorted(((title_similarity(job.title, other.title), other.job_id, other)
+                         for other in by_company.get(normalize_company(job.company), [])),
+                        key=lambda t: (t[0], -t[1]), reverse=True)
+        if not scored or scored[0][0] < TWIN_SIMILARITY or (
+                len(scored) > 1 and scored[1][0] == scored[0][0]):
+            continue
+        twin = scored[0][2]
+        job.descriptions = list(twin.descriptions)
+        job.languages |= twin.languages
+        job.required_languages |= twin.required_languages
+        job.contract_types |= twin.contract_types
+        if job.take_home_max is None:
+            job.take_home_max = twin.take_home_max
+        job.twin_title = twin.title
+        borrowed += 1
+    if borrowed:
+        log.info("%d jobs without advert text took it from the same job on another source",
+                 borrowed)
+    return borrowed
 
 
 def score_all(conn: psycopg.Connection) -> dict[str, int]:
