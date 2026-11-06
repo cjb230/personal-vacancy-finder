@@ -496,7 +496,9 @@ def required_languages(source: str, raw: dict[str, Any] | None) -> set[str]:
     return set()
 
 
-def load_facts(conn: psycopg.Connection) -> list[JobFacts]:
+def load_facts(conn: psycopg.Connection, job_ids: list[int] | None = None) -> list[JobFacts]:
+    """Every open job, or with job_ids, the open jobs of those jobs' companies (enough to find
+    their twins, which are always at the same company)."""
     rows = conn.execute(
         """
         SELECT j.id, j.title, c.name, COALESCE(c.sectors, '{}'), COALESCE(c.excluded, false),
@@ -510,8 +512,11 @@ def load_facts(conn: psycopg.Connection) -> list[JobFacts]:
         -- Text James sent from the job's page (capture.py), for alerts that carry none.
         LEFT JOIN page_captures pc ON pc.external_id = p.external_id AND s.kind = 'email'
         WHERE j.status = 'open'
+          AND (%(ids)s::bigint[] IS NULL OR j.id = ANY(%(ids)s) OR j.company_id IN (
+               SELECT company_id FROM jobs WHERE id = ANY(%(ids)s)))
         ORDER BY j.id
-        """
+        """,
+        {"ids": job_ids},
     ).fetchall()
     facts: dict[int, JobFacts] = {}
     for (job_id, title, company, sectors, excluded, mode, location, description, language,
@@ -596,22 +601,37 @@ def borrow_twin_descriptions(jobs: list[JobFacts]) -> int:
 
 def score_all(conn: psycopg.Connection) -> dict[str, int]:
     """Rescore every open job; scores of closed jobs are kept as they were. Returns counts."""
-    counts: dict[str, int] = defaultdict(int)
     with conn.transaction():
-        for job in load_facts(conn):
-            result = score_job(job)
-            counts[result.verdict] += 1
-            conn.execute(
-                """
-                INSERT INTO job_scores (job_id, verdict, score, role_level, reasons)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (job_id) DO UPDATE SET
-                    verdict = EXCLUDED.verdict, score = EXCLUDED.score,
-                    role_level = EXCLUDED.role_level, reasons = EXCLUDED.reasons,
-                    scored_at = now()
-                """,
-                (job.job_id, result.verdict, result.score, result.role_level, result.reasons),
-            )
+        counts = _score(conn, load_facts(conn))
     log.info("Scored open jobs: %d match, %d maybe, %d no",
              counts.get("match", 0), counts.get("maybe", 0), counts.get("no", 0))
+    return counts
+
+
+def score_jobs(conn: psycopg.Connection, job_ids: list[int]) -> dict[str, int]:
+    """Rescore just these jobs and the other open jobs at their companies, e.g. after a
+    capture, instead of every job (seconds with a few thousand open jobs)."""
+    with conn.transaction():
+        return _score(conn, load_facts(conn, job_ids))
+
+
+def _score(conn: psycopg.Connection, jobs: list[JobFacts]) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    rows = []
+    for job in jobs:
+        result = score_job(job)
+        counts[result.verdict] += 1
+        rows.append((job.job_id, result.verdict, result.score, result.role_level, result.reasons))
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO job_scores (job_id, verdict, score, role_level, reasons)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (job_id) DO UPDATE SET
+                verdict = EXCLUDED.verdict, score = EXCLUDED.score,
+                role_level = EXCLUDED.role_level, reasons = EXCLUDED.reasons,
+                scored_at = now()
+            """,
+            rows,
+        )
     return dict(counts)
