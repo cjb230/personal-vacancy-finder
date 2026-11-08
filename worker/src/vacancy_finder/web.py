@@ -38,7 +38,11 @@ from .matching import score_jobs
 log = logging.getLogger(__name__)
 
 PAGE_SIZE = 100
-DECISIONS = {"interested": "Interested", "not_interested": "Not interested", "applied": "Applied"}
+DECISIONS = {"interested": "Interested", "not_interested": "Not interested", "applied": "Applied",
+             "rejected": "Rejected"}
+# Decisions whose button shows only on jobs with one of these decisions: an application can
+# only be rejected once it has been made.
+DECISION_NEEDS = {"rejected": {"applied", "rejected"}}
 # Feedback kinds, as (label, takes a note). Notes are kept to improve the filters later;
 # score_higher/score_lower only record which way the weights should move for this job.
 FEEDBACK = {
@@ -63,6 +67,7 @@ VIEWS = {
     "interested": ("Interested", "r.decision = 'interested'"),
     "applied": ("Applied", "r.decision = 'applied'"),
     "missed": ("Missed", "r.decision = 'missed'"),
+    "rejected": ("Rejected", "r.decision = 'rejected'"),
     "not_interested": ("Not interested", f"{LISTED} AND r.decision = 'not_interested'"),
     "no": ("Filtered out", f"{LISTED} AND s.verdict = 'no' AND r.decision IS NULL"),
 }
@@ -120,7 +125,8 @@ SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.dec
         FROM postings p JOIN sources so ON so.id = p.source_id
         WHERE p.job_id = j.id AND (p.closed_at IS NULL OR j.status = 'closed')) AS sources,
        cf.job_id IS NOT NULL, cf.confirmed_at AT TIME ZONE %(tz)s,
-       r.ad_gone_at AT TIME ZONE %(tz)s, j.last_seen_at AT TIME ZONE %(tz)s
+       r.ad_gone_at AT TIME ZONE %(tz)s, j.last_seen_at AT TIME ZONE %(tz)s,
+       r.updated_at AT TIME ZONE %(tz)s
 FROM jobs j
 JOIN job_scores s ON s.job_id = j.id
 LEFT JOIN job_reviews r ON r.job_id = j.id
@@ -327,14 +333,14 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     now = datetime.now(ZoneInfo(DISPLAY_TZ))
     for (job_id, job_title, company, verdict, score, level, reasons, decision, first_seen,
          closes_at, is_deadline, closed_already, applied_at, application_dir, url, locations,
-         sources, checkable, confirmed_at, ad_gone_at, last_seen) in rows:
+         sources, checkable, confirmed_at, ad_gone_at, last_seen, reviewed_at) in rows:
         # "Applied" opens a form asking when and where the application is, instead of saving.
         buttons = "".join(
             f'<button type="button" onclick="openApply({job_id})" class="{"on" if decision == key else ""}">'
             f"{label}</button>" if key == "applied" else
             f'<button name="decision" value="{key}" class="{"on" if decision == key else ""}">'
             f"{label}</button>"
-            for key, label in DECISIONS.items()
+            for key, label in DECISIONS.items() if decision in DECISION_NEEDS.get(key, {decision})
         )
         clear = '<button name="decision" value="">Clear</button>' if decision else ""
         chips = "".join(f"<span>{esc(r)}</span>" for r in reasons)
@@ -352,7 +358,7 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     <input type="hidden" name="job_id" value="{job_id}">
     <input type="hidden" name="back" value="{back}">
     {buttons}{clear}</form>
-{render_apply(job_id, decision, applied_at, application_dir, now, back)}{
+{render_apply(job_id, decision, applied_at, application_dir, now, back, reviewed_at)}{
 render_tailor(job_id, tailorings.get(job_id), back) if decision == "interested" else ""}{render_notes(job_id, notes.get(job_id, []), back)}{render_feedback(job_id, back)}
 </div>""")
     pager = ""
@@ -474,16 +480,20 @@ def render_confirmed(checkable: bool, confirmed_at: datetime | None,
 
 
 def render_apply(job_id: int, decision: str | None, applied_at: datetime | None,
-                 application_dir: str | None, now: datetime, back: str) -> str:
-    """The applied date and folder for an applied job, and the hidden form that "Applied" opens
-    to set or change them. applied_at is a DISPLAY_TZ local time."""
-    applied = decision == "applied"
+                 application_dir: str | None, now: datetime, back: str,
+                 reviewed_at: datetime | None = None) -> str:
+    """The applied date and folder for an applied or rejected job (and when it was marked
+    rejected), and the hidden form that "Applied" opens to set or change them. Times are
+    DISPLAY_TZ local times."""
+    applied = decision in ("applied", "rejected")
     shown = ""
     if applied:
         folder = (f' · folder <code>{esc(application_dir)}</code>' if application_dir
                   else " · no folder given")
         when = f"{applied_at:%d %b %Y %H:%M}" if applied_at else "date not recorded"
-        shown = f'<div class="applied">Applied {when}{folder}</div>'
+        rejected = (f" · rejected {reviewed_at:%d %b %Y}" if decision == "rejected" and reviewed_at
+                    else "")
+        shown = f'<div class="applied">Applied {when}{folder}{rejected}</div>'
     value = (applied_at if applied and applied_at else now).strftime("%Y-%m-%dT%H:%M")
     return f"""{shown}<form class="apply" id="apply-{job_id}" method="post" action="/review" hidden
   data-tz="{esc(DISPLAY_TZ)}"{"" if applied else ' data-fresh="1"'}>

@@ -187,6 +187,38 @@ def test_applied_records_when_and_where(conn, monkeypatch):  # noqa: F811
     assert conn.execute("SELECT applied_at > now() - interval '1 minute' FROM job_reviews").fetchone()[0]
 
 
+def test_applied_job_can_be_marked_rejected(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    source = ensure_source(conn, "test", "Test board", "board")
+    upsert_posting(conn, source, RawPosting(
+        external_id="1", url="https://x.example/1", title="Engineering Manager",
+        company_name="Orbit", location_text="Remote, Europe", work_mode="remote",
+        description="Python and PostgreSQL for satellite imagery. You will lead the team."))
+    conn.commit()
+    score_all(conn)
+    job_id = conn.execute("SELECT id FROM jobs").fetchone()[0]
+    rejected_button = 'name="decision" value="rejected"'
+
+    # Only an application can be rejected.
+    assert rejected_button not in web.render("match", "", 0)
+    web.save_review(job_id, "interested")
+    assert rejected_button not in web.render("interested", "", 0)
+
+    web.save_review(job_id, "applied", datetime(2026, 10, 30, 2, 45), "~/Jobs/Orbit")
+    assert rejected_button in web.render("applied", "", 0)
+    web.save_review(job_id, "rejected")
+    page = web.render("rejected", "", 0)
+    assert "Rejected (1)" in page and "Applied (0)" in page and "Engineering Manager" in page
+    assert "Applied 30 Oct 2026 02:45" in page and "<code>~/Jobs/Orbit</code>" in page
+    assert " · rejected " in page and rejected_button in page
+
+    # Its advert going doesn't touch it.
+    conn.execute("UPDATE postings SET closed_at = now()")
+    confirm_tracked_jobs(conn)
+    conn.commit()
+    assert conn.execute("SELECT decision, ad_gone_at FROM job_reviews").fetchone() == ("rejected", None)
+
+
 def test_last_checked_box(conn, monkeypatch):  # noqa: F811
     monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
     monkeypatch.setattr(web, "DISPLAY_TZ", "UTC")
