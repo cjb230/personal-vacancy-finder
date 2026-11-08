@@ -9,7 +9,9 @@ when each source was last checked, and whether that check failed. Marking a job 
 for when (default now) and the folder holding the application, both shown on the job. Matches,
 Interested, Applied and Missed jobs show when a source last confirmed their advert, or that it
 has gone; interested jobs whose adverts go move to Missed. /capture installs a bookmarklet that
-sends the description of a LinkedIn job open in James's browser (see capture.py). Served by the worker on WEB_PORT (8080), which
+sends the description of a LinkedIn job open in James's browser (see capture.py). Interested jobs
+get a "Tailor CV" button that starts a CV tailoring run on the Tailor API (tailor-api.md in the
+cv-creator repo) and keeps the link to the run's status page. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -27,6 +29,7 @@ from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlencode, urlparse
 from zoneinfo import ZoneInfo
 
+import httpx
 import psycopg
 
 from .capture import bookmarklet, save_capture
@@ -79,6 +82,18 @@ SORTS = {"score": ("Best score", "s.score DESC, j.first_seen_at DESC"),
                                         "NULLS LAST, s.score DESC")}
 # Role levels (from job_scores.role_level) that can be toggled off; every other level always shows.
 ROLE_TOGGLES = {"staff": "Staff", "manager": "Manager", "director": "Director"}
+# The Tailor API. Runs are started from this server at TAILOR_API_URL (docker-compose points it
+# at the host, where the API listens on 127.0.0.1); the status links stored and shown use
+# TAILOR_BROWSER_URL, which browsers on the tailnet (laptop, phone) can reach.
+TAILOR_API_URL = os.environ.get("TAILOR_API_URL", "http://127.0.0.1:8765").rstrip("/")
+TAILOR_BROWSER_URL = os.environ.get(
+    "TAILOR_BROWSER_URL", "https://macbook-pro-2.tailb374c3.ts.net:8091").rstrip("/")
+
+
+class TailorError(Exception):
+    """A tailoring run could not be started; the message is shown on the page."""
+
+
 # Times are shown, and "since" is read, in this zone (Postgres has the zone data).
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "Europe/Warsaw")
 FILTERS = """
@@ -212,8 +227,12 @@ main { padding:8px 20px 40px; max-width:1100px; }
   background:var(--bg); color:var(--fg); cursor:pointer; }
 .applied { margin:4px 0 0 46px; font-size:13px; }
 .applied code { user-select:all; background:var(--chip); border-radius:4px; padding:0 4px; }
+.tailor { margin:6px 0 0 46px; font-size:13px; display:flex; gap:8px; align-items:center;
+  flex-wrap:wrap; } .tailor a { color:var(--accent); text-decoration:none; }
+.tailor button { font-size:12px; padding:3px 8px; border:1px solid var(--line); border-radius:6px;
+  background:var(--bg); color:var(--fg); cursor:pointer; } .tailor .when { color:var(--muted); }
 .pager { margin-top:16px; } .empty { color:var(--muted); padding:24px 0; }
-@media (max-width:600px) { .meta, .reasons, .actions, .feedback, .notes, .apply, .applied { margin-left:0; } }
+@media (max-width:600px) { .meta, .reasons, .actions, .feedback, .notes, .apply, .applied, .tailor { margin-left:0; } }
 """
 
 # Opens a job's "Applied" form. A job not yet applied gets the current time in DISPLAY_TZ,
@@ -292,8 +311,14 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
             ([row[0] for row in rows],),
         ):
             notes.setdefault(job_id, []).append((feedback_id, kind, note))
+        # The latest tailoring run of each interested job on the page.
+        tailorings = {job_id: (status_url, created) for job_id, status_url, created in conn.execute(
+            "SELECT DISTINCT ON (job_id) job_id, status_url, created_at AT TIME ZONE %s"
+            " FROM job_tailorings WHERE job_id = ANY(%s) ORDER BY job_id, created_at DESC, id DESC",
+            (DISPLAY_TZ, [row[0] for row in rows if row[7] == "interested"]),
+        )}
 
-    tabs = "".join(
+    tabs ="".join(
         f'<a class="{"on" if key == view else ""}" href="/?{urlencode({"view": key, "q": q, **keep})}">'
         f"{esc(label)} ({count})</a>"
         for (key, (label, _)), count in zip(VIEWS.items(), counts)
@@ -327,7 +352,8 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     <input type="hidden" name="job_id" value="{job_id}">
     <input type="hidden" name="back" value="{back}">
     {buttons}{clear}</form>
-{render_apply(job_id, decision, applied_at, application_dir, now, back)}{render_notes(job_id, notes.get(job_id, []), back)}{render_feedback(job_id, back)}
+{render_apply(job_id, decision, applied_at, application_dir, now, back)}{
+render_tailor(job_id, tailorings.get(job_id), back) if decision == "interested" else ""}{render_notes(job_id, notes.get(job_id, []), back)}{render_feedback(job_id, back)}
 </div>""")
     pager = ""
     if len(rows) == PAGE_SIZE:
@@ -469,6 +495,64 @@ def render_apply(job_id: int, decision: str | None, applied_at: datetime | None,
   <button>{"Save" if applied else "Mark applied"}</button>
   <button type="button" onclick="openApply({job_id})">Cancel</button></form>
 """
+
+
+def render_tailor(job_id: int, latest: tuple[str, datetime] | None, back: str) -> str:
+    """The "Tailor CV" button; once a run has been started, a link to its status page (which
+    links the report and PDF when ready) and a button for a fresh run. latest is the stored
+    status URL and when it was started, as a DISPLAY_TZ local time."""
+    fields = (f'<input type="hidden" name="job_id" value="{job_id}">'
+              f'<input type="hidden" name="back" value="{back}">')
+    if latest is None:
+        return (f'<form class="tailor" method="post" action="/tailor">{fields}'
+                '<button title="Start a CV tailoring run for this advert (takes a few minutes)">'
+                'Tailor CV</button></form>')
+    status_url, created = latest
+    return (f'<form class="tailor" method="post" action="/tailor">{fields}'
+            f'<a href="{esc(status_url)}" target="_blank" rel="noopener">CV draft</a>'
+            f'<span class="when">started {created:%d %b %H:%M}</span>'
+            '<button name="force" value="1" title="Start a new tailoring run for this advert">'
+            'Tailor again</button></form>')
+
+
+def start_tailoring(job_id: int, force: bool = False) -> str:
+    """Starts a tailoring run for the job's advert (the URL its title links to) and stores the
+    link to the run's status page, which it returns. If the API already has a run for that URL
+    it returns that one instead, unless force; its link is stored all the same."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT url FROM postings WHERE job_id = %s"
+            " ORDER BY closed_at IS NULL DESC, last_seen_at DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        if row is None or not row[0]:
+            raise TailorError("This job has no advert URL to tailor a CV for.")
+        ad_url = row[0]
+        try:
+            r = httpx.post(f"{TAILOR_API_URL}/jobs",
+                           json={"url": ad_url, **({"force": True} if force else {})}, timeout=10)
+        except httpx.HTTPError as e:
+            raise TailorError(f"Could not reach the Tailor API at {TAILOR_API_URL}: {e}") from e
+        try:
+            run = r.json()
+        except ValueError:
+            run = {}
+        run = run if isinstance(run, dict) else {}
+        # 202 is a new run; 200 is the API's existing run for this URL.
+        if r.status_code not in (HTTPStatus.OK, HTTPStatus.ACCEPTED) or not run.get("id"):
+            raise TailorError(f"The Tailor API refused the run ({r.status_code}): "
+                              f"{run.get('error') or r.text[:300]}")
+        status_url = f"{TAILOR_BROWSER_URL}/jobs/{run['id']}?format=html"
+        conn.execute(
+            """
+            INSERT INTO job_tailorings (job_id, tailor_job_id, ad_url, status, status_url)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (job_id, tailor_job_id) DO NOTHING
+            """,
+            (job_id, run["id"], ad_url, run.get("status"), status_url),
+        )
+    log.info("Tailoring run %s (%s) for job %d: %s", run["id"], run.get("status"), job_id, ad_url)
+    return status_url
 
 
 def hidden(fields: dict) -> str:
@@ -738,7 +822,7 @@ class Handler(BaseHTTPRequestHandler):
             length = min(int(self.headers.get("Content-Length") or 0), 400_000)
             self._send(*capture(parse_qs(self.rfile.read(length).decode(errors="replace"))))
             return
-        if path not in ("/review", "/feedback", "/feedback/delete"):
+        if path not in ("/review", "/feedback", "/feedback/delete", "/tailor"):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         length = min(int(self.headers.get("Content-Length") or 0), 20_000)
@@ -769,10 +853,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.BAD_REQUEST)
                 return
             save_feedback(key, kind, note)
+        elif path == "/tailor":
+            try:
+                start_tailoring(key, force=form.get("force", [""])[0] == "1")
+            except TailorError as e:
+                log.warning("Tailoring for job %d not started: %s", key, e)
+                self._send(HTTPStatus.BAD_GATEWAY, page(
+                    "CV tailoring not started", f"<h2>CV tailoring not started</h2><p>{esc(e)}</p>"
+                    f'<p><a href="{esc(safe_back(back))}">Back to the list</a></p>'))
+                return
         else:
             delete_feedback(key)
         self.send_response(HTTPStatus.SEE_OTHER)
-        self.send_header("Location", back if back.startswith("/") and not back.startswith("//") else "/")
+        self.send_header("Location", safe_back(back))
         self.end_headers()
 
     def _send(self, status: HTTPStatus, body: str) -> None:
@@ -785,6 +878,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args) -> None:  # quieter than the default
         log.debug("web: " + format, *args)
+
+
+def safe_back(back: str) -> str:
+    """Only redirect back to a path on this site."""
+    return back if back.startswith("/") and not back.startswith("//") else "/"
 
 
 def address(port: int | None = None) -> tuple[str, int]:

@@ -43,6 +43,10 @@ services:
       IMAP_FOLDER: ${IMAP_FOLDER:-INBOX}
       IMAP_PARSED_FOLDER: ${IMAP_PARSED_FOLDER:-Parsed job alerts}
       EMAIL_ALERT_DAYS: ${EMAIL_ALERT_DAYS:-30}
+      # The CV Tailor API listens on the host's 127.0.0.1:8765, which Docker Desktop reaches
+      # from the container as host.docker.internal. Links shown in the page use the tailnet URL.
+      TAILOR_API_URL: ${TAILOR_API_URL:-http://host.docker.internal:8765}
+      TAILOR_BROWSER_URL: ${TAILOR_BROWSER_URL:-https://macbook-pro-2.tailb374c3.ts.net:8091}
       WEB_HOST: 0.0.0.0  # inside the container; published on 127.0.0.1 only, below
     ports:
       - "8090:8080"

@@ -297,3 +297,62 @@ def test_role_toggles_hide_staff_manager_and_director(conn, monkeypatch):  # noq
     assert 'href="/?view=match&q=&seen=24&hide=director">Staff</a>' in page
 
     assert shown("staff,manager,director") == {"Senior Python Engineer"}  # other levels show
+
+
+def test_tailor_cv_button_starts_a_run_and_keeps_its_link(conn, monkeypatch):  # noqa: F811
+    import httpx
+
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    monkeypatch.setattr(web, "TAILOR_API_URL", "http://tailor.test")
+    monkeypatch.setattr(web, "TAILOR_BROWSER_URL", "https://tailor.example:8091")
+    source = ensure_source(conn, "test", "Test board", "board")
+    upsert_posting(conn, source, RawPosting(
+        external_id="1", url="https://x.example/1", title="Engineering Manager",
+        company_name="Orbit", location_text="Remote, Europe", work_mode="remote",
+        description="Python and PostgreSQL for satellite imagery. You will lead the team."))
+    conn.commit()
+    score_all(conn)
+    job_id = conn.execute("SELECT id FROM jobs").fetchone()[0]
+
+    # Only interested jobs get the button.
+    assert 'action="/tailor"' not in web.render("match", "", 0)
+    web.save_review(job_id, "interested")
+    assert 'action="/tailor"' in web.render("interested", "", 0)
+
+    sent = []
+    replies = iter([
+        httpx.Response(202, json={"id": "20261108-172443-5533", "status": "queued"}),
+        httpx.Response(200, json={"id": "20261108-172443-5533", "status": "running"}),  # duplicate
+        httpx.Response(202, json={"id": "20261108-180000-0001", "status": "queued"}),
+        httpx.Response(400, json={"error": "url must be http or https"}),
+    ])
+
+    def fake_post(url, json, timeout):
+        sent.append((url, json))
+        return next(replies)
+
+    monkeypatch.setattr(web.httpx, "post", fake_post)
+    first = web.start_tailoring(job_id)
+    assert first == "https://tailor.example:8091/jobs/20261108-172443-5533?format=html"
+    assert sent[0] == ("http://tailor.test/jobs", {"url": "https://x.example/1"})
+    page = web.render("interested", "", 0)
+    assert f'href="{first}"' in page and "CV draft" in page and "Tailor again" in page
+
+    assert web.start_tailoring(job_id) == first  # the API's existing run: stored once
+    assert count(conn, "SELECT count(*) FROM job_tailorings") == 1
+
+    again = web.start_tailoring(job_id, force=True)
+    assert sent[2][1] == {"url": "https://x.example/1", "force": True}
+    page = web.render("interested", "", 0)
+    assert again in page and first not in page  # the latest run is linked
+
+    with pytest.raises(web.TailorError, match="url must be http"):
+        web.start_tailoring(job_id)
+
+    def unreachable(url, json, timeout):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(web.httpx, "post", unreachable)
+    with pytest.raises(web.TailorError, match="Could not reach"):
+        web.start_tailoring(job_id)
+    assert count(conn, "SELECT count(*) FROM job_tailorings") == 2
