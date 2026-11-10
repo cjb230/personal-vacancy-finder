@@ -43,7 +43,7 @@ The worker is a single process (`vacancy_finder/__main__.py`). On start it appli
 
 **Web** (`web.py`) uses only the stdlib `ThreadingHTTPServer` and renders HTML by hand, with no framework or templates. Filters are query-string parameters, so URLs can be bookmarked.
 
-**Migrations**: add numbered `.sql` files to `worker/migrations/` (the next is `007_...`; 004 was never used). `migrate.py` applies each file once, in its own transaction, recorded in `schema_migrations`. Never edit a migration that has already been applied.
+**Migrations**: add numbered `.sql` files to `worker/migrations/` (use the next free number). `migrate.py` applies each file once, in its own transaction, recorded in `schema_migrations`. Never edit a migration that has already been applied.
 
 ## Conventions
 

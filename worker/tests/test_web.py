@@ -388,3 +388,82 @@ def test_tailor_cv_button_starts_a_run_and_keeps_its_link(conn, monkeypatch):  #
     with pytest.raises(web.TailorError, match="Could not reach"):
         web.start_tailoring(job_id)
     assert count(conn, "SELECT count(*) FROM job_tailorings") == 2
+
+
+def test_paste_description_for_a_job_without_one(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    source = ensure_source(conn, "test", "Test board", "board")
+    upsert_posting(conn, source, RawPosting(
+        external_id="1", url="https://x.example/1", title="Engineering Manager",
+        company_name="Orbit", location_text="Remote, Europe", work_mode="remote"))
+    upsert_posting(conn, source, RawPosting(
+        external_id="2", url="https://x.example/2", title="Staff Engineer",
+        company_name="Acme", location_text="Remote, Europe", work_mode="remote",
+        description="Python and PostgreSQL. You will lead the platform team."))
+    conn.commit()
+    score_all(conn)
+    bare, described = (conn.execute("SELECT id FROM jobs WHERE title = %s", (t,)).fetchone()[0]
+                       for t in ("Engineering Manager", "Staff Engineer"))
+    before = conn.execute("SELECT score FROM job_scores WHERE job_id = %s", (bare,)).fetchone()[0]
+
+    every_tab = lambda: "".join(web.render(v, "", 0) for v in ("match", "maybe", "no"))  # noqa: E731
+    page = every_tab()
+    assert f'id="describe-{bare}"' in page and "Paste description" in page
+    assert f'id="describe-{described}"' not in page  # it has a description already
+
+    text = ("About the job\n\nWe build software for satellite imagery in Python and PostgreSQL. "
+            "You will lead the ground segment team.\n\nShow more")
+    web.save_description(bare, text)
+    assert conn.execute("SELECT description, language FROM job_descriptions WHERE job_id = %s",
+                        (bare,)).fetchone() == (
+        "We build software for satellite imagery in Python and PostgreSQL. "
+        "You will lead the ground segment team.", "en")
+    after = conn.execute("SELECT score FROM job_scores WHERE job_id = %s", (bare,)).fetchone()[0]
+    assert after > before  # rescored with the new text
+
+    page = every_tab()
+    assert "Replace description" in page and "Paste description" not in page
+    assert "satellite imagery in Python" in page  # the dialog starts with the pasted text
+
+    # A later paste replaces the first, and blank text is refused.
+    web.save_description(bare, "Sales role selling advertising.")
+    assert count(conn, "SELECT count(*) FROM job_descriptions") == 1
+    with pytest.raises(ValueError):
+        web.save_description(bare, "  \n ")
+    # Feedback snapshots fall back to the pasted text.
+    web.save_feedback(bare, "score_lower")
+    assert conn.execute("SELECT ad_text FROM job_feedback").fetchone() == (
+        "Sales role selling advertising.",)
+
+
+def test_paste_description_route(conn, monkeypatch):  # noqa: F811
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    import httpx
+
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    source = ensure_source(conn, "test", "Test board", "board")
+    upsert_posting(conn, source, RawPosting(
+        external_id="1", url="https://x.example/1", title="Engineering Manager",
+        company_name="Orbit", location_text="Remote, Europe", work_mode="remote"))
+    conn.commit()
+    score_all(conn)
+    job_id = conn.execute("SELECT id FROM jobs").fetchone()[0]
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        long_text = "Python and PostgreSQL. " * 2000  # longer than the other forms accept
+        response = httpx.post(f"{base}/describe", data={
+            "job_id": job_id, "description": long_text, "back": f"/?view=maybe#job-{job_id}"})
+        assert response.status_code == 303
+        assert response.headers["location"] == f"/?view=maybe#job-{job_id}"
+        assert conn.execute("SELECT length(description) FROM job_descriptions").fetchone() == (
+            len(long_text.strip()),)
+
+        response = httpx.post(f"{base}/describe", data={"job_id": job_id, "description": " "})
+        assert response.status_code == 400
+    finally:
+        server.shutdown()
