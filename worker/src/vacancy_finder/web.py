@@ -11,7 +11,9 @@ Interested, Applied and Missed jobs show when a source last confirmed their adve
 has gone; interested jobs whose adverts go move to Missed. /capture installs a bookmarklet that
 sends the description of a LinkedIn job open in James's browser (see capture.py). Interested jobs
 get a "Tailor CV" button that starts a CV tailoring run on the Tailor API (tailor-api.md in the
-cv-creator repo) and keeps the link to the run's status page. Served by the worker on WEB_PORT (8080), which
+cv-creator repo) and keeps the link to the run's status page. Open jobs with no advert text get a
+"Paste description" button opening a dialog whose text is saved as the job's description
+(job_descriptions) before the job is rescored. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -32,7 +34,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import psycopg
 
-from .capture import bookmarklet, save_capture
+from .capture import DESCRIPTION_MAX, bookmarklet, save_capture, save_job_description
 from .matching import score_jobs
 
 log = logging.getLogger(__name__)
@@ -126,7 +128,14 @@ SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.dec
         WHERE p.job_id = j.id AND (p.closed_at IS NULL OR j.status = 'closed')) AS sources,
        cf.job_id IS NOT NULL, cf.confirmed_at AT TIME ZONE %(tz)s,
        r.ad_gone_at AT TIME ZONE %(tz)s, j.last_seen_at AT TIME ZONE %(tz)s,
-       r.updated_at AT TIME ZONE %(tz)s
+       r.updated_at AT TIME ZONE %(tz)s,
+       -- An open job with no advert text from its postings or captures can be given some.
+       j.status = 'open' AND NOT EXISTS (
+           SELECT 1 FROM postings p JOIN sources so ON so.id = p.source_id
+           LEFT JOIN page_captures pc ON pc.external_id = p.external_id AND so.kind = 'email'
+           WHERE p.job_id = j.id AND p.closed_at IS NULL
+             AND NULLIF(COALESCE(p.description, pc.description), '') IS NOT NULL) AS lacks_text,
+       (SELECT d.description FROM job_descriptions d WHERE d.job_id = j.id) AS pasted
 FROM jobs j
 JOIN job_scores s ON s.job_id = j.id
 LEFT JOIN job_reviews r ON r.job_id = j.id
@@ -238,6 +247,18 @@ main { padding:8px 20px 40px; max-width:1100px; }
 .tailor button { font-size:12px; padding:3px 8px; border:1px solid var(--line); border-radius:6px;
   background:var(--bg); color:var(--fg); cursor:pointer; } .tailor .when { color:var(--muted); }
 .pager { margin-top:16px; } .empty { color:var(--muted); padding:24px 0; }
+.meta button.describe { font-size:12px; margin-left:6px; padding:1px 8px; border:1px solid var(--line);
+  border-radius:6px; background:var(--bg); color:var(--accent); cursor:pointer; }
+dialog.describe { width:min(720px, calc(100vw - 32px)); border:1px solid var(--line);
+  border-radius:10px; background:var(--bg); color:var(--fg); padding:16px; }
+dialog.describe::backdrop { background:rgba(0,0,0,.4); }
+dialog.describe h3 { margin:0 0 8px; font-size:16px; }
+dialog.describe textarea { width:100%; min-height:300px; font:inherit; font-size:14px; padding:6px;
+  border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+dialog.describe .buttons { margin-top:8px; display:flex; gap:8px; justify-content:flex-end; }
+dialog.describe button { font-size:13px; padding:4px 12px; border:1px solid var(--line);
+  border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; }
+dialog.describe button.save { background:var(--accent); color:#fff; border-color:var(--accent); }
 @media (max-width:600px) { .meta, .reasons, .actions, .feedback, .notes, .apply, .applied, .tailor { margin-left:0; } }
 """
 
@@ -333,7 +354,8 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     now = datetime.now(ZoneInfo(DISPLAY_TZ))
     for (job_id, job_title, company, verdict, score, level, reasons, decision, first_seen,
          closes_at, is_deadline, closed_already, applied_at, application_dir, url, locations,
-         sources, checkable, confirmed_at, ad_gone_at, last_seen, reviewed_at) in rows:
+         sources, checkable, confirmed_at, ad_gone_at, last_seen, reviewed_at, lacks_text,
+         pasted) in rows:
         # "Applied" opens a form asking when and where the application is, instead of saving.
         buttons = "".join(
             f'<button type="button" onclick="openApply({job_id})" class="{"on" if decision == key else ""}">'
@@ -352,7 +374,8 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     <span>{esc(company)}</span></div>
   <div class="meta">{render_locations(locations)} · {esc(sources)} ·
     first seen {first_seen:%d %b %H:%M}{render_closing(closes_at, is_deadline, closed_already)}{
-    render_confirmed(checkable, confirmed_at, ad_gone_at, last_seen) if view in CONFIRMED_VIEWS else ""}</div>
+    render_confirmed(checkable, confirmed_at, ad_gone_at, last_seen) if view in CONFIRMED_VIEWS else ""}{
+    render_describe(job_id, job_title, pasted, back) if lacks_text or pasted is not None else ""}</div>
   <div class="reasons">{chips}</div>
   <form class="actions" method="post" action="/review">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -507,6 +530,31 @@ def render_apply(job_id: int, decision: str | None, applied_at: datetime | None,
 """
 
 
+def render_describe(job_id: int, title: str, pasted: str | None, back: str) -> str:
+    """The "Paste description" button for a job with no advert text, and the dialog it opens:
+    one text box, saved as the job's description, after which the job is rescored. Once text
+    has been pasted the button offers to replace it, with the dialog starting from that text."""
+    label = "Replace description" if pasted is not None else "Paste description"
+    return (f'<button type="button" class="describe" '
+            f'onclick="document.getElementById(\'describe-{job_id}\').showModal()">{label}</button>'
+            f'<dialog class="describe" id="describe-{job_id}">'
+            f'<form method="post" action="/describe"><h3>Description: {esc(title)}</h3>'
+            f'<input type="hidden" name="job_id" value="{job_id}">'
+            f'<input type="hidden" name="back" value="{back}">'
+            f'<textarea name="description" required aria-label="Job description" '
+            f'placeholder="Paste the advert text here">{esc(pasted)}</textarea>'
+            '<div class="buttons"><button formmethod="dialog" formnovalidate>Cancel</button>'
+            '<button class="save">Save and rescore</button></div></form></dialog>')
+
+
+def save_description(job_id: int, text: str) -> None:
+    """Store pasted advert text for a job and rescore it. Raises ValueError for blank text."""
+    with connect() as conn:
+        save_job_description(conn, job_id, text)
+        conn.commit()
+        score_jobs(conn, [job_id])
+
+
 def render_tailor(job_id: int, latest: tuple[str, datetime] | None, back: str) -> str:
     """The "Tailor CV" button; once a run has been started, a link to its status page (which
     links the report and PDF when ready) and a button for a fresh run. latest is the stored
@@ -659,8 +707,9 @@ def save_feedback(job_id: int, kind: str, note: str = "") -> None:
             INSERT INTO job_feedback (job_id, kind, note, title, company, ad_text, postings,
                                       verdict, score, role_level, reasons)
             SELECT j.id, %(kind)s, NULLIF(%(note)s, ''), j.title, c.name,
-                   (SELECT p.description FROM postings p WHERE p.job_id = j.id
-                    ORDER BY p.closed_at IS NULL DESC, p.last_seen_at DESC LIMIT 1),
+                   COALESCE((SELECT p.description FROM postings p WHERE p.job_id = j.id
+                             ORDER BY p.closed_at IS NULL DESC, p.last_seen_at DESC LIMIT 1),
+                            (SELECT d.description FROM job_descriptions d WHERE d.job_id = j.id)),
                    (SELECT coalesce(jsonb_agg(jsonb_build_object(
                         'source', so.key, 'url', p.url, 'title', p.title,
                         'company_name', p.company_name, 'location_text', p.location_text,
@@ -832,10 +881,12 @@ class Handler(BaseHTTPRequestHandler):
             length = min(int(self.headers.get("Content-Length") or 0), 400_000)
             self._send(*capture(parse_qs(self.rfile.read(length).decode(errors="replace"))))
             return
-        if path not in ("/review", "/feedback", "/feedback/delete", "/tailor"):
+        if path not in ("/review", "/feedback", "/feedback/delete", "/tailor", "/describe"):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        length = min(int(self.headers.get("Content-Length") or 0), 20_000)
+        # A pasted description is form-encoded, so allow for several bytes per character.
+        limit = DESCRIPTION_MAX * 8 if path == "/describe" else 20_000
+        length = min(int(self.headers.get("Content-Length") or 0), limit)
         form = parse_qs(self.rfile.read(length).decode())
         back = form.get("back", ["/"])[0]
         try:
@@ -872,6 +923,15 @@ class Handler(BaseHTTPRequestHandler):
                     "CV tailoring not started", f"<h2>CV tailoring not started</h2><p>{esc(e)}</p>"
                     f'<p><a href="{esc(safe_back(back))}">Back to the list</a></p>'))
                 return
+        elif path == "/describe":
+            try:
+                save_description(key, form.get("description", [""])[0])
+            except ValueError as e:
+                self._send(HTTPStatus.BAD_REQUEST, page(
+                    "Description not saved", f"<h2>Description not saved</h2><p>{esc(e)}</p>"
+                    f'<p><a href="{esc(safe_back(back))}">Back to the list</a></p>'))
+                return
+            log.info("Pasted a description for job %d", key)
         else:
             delete_feedback(key)
         self.send_response(HTTPStatus.SEE_OTHER)

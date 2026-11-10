@@ -539,6 +539,12 @@ def load_facts(conn: psycopg.Connection, job_ids: list[int] | None = None) -> li
             pay = take_home(pay, contract)
             if job.take_home_max is None or pay > job.take_home_max:
                 job.take_home_max = pay
+    # Text James pasted on the results page for a job that had none (web.py).
+    for job_id, description, language in conn.execute(
+            "SELECT job_id, description, language FROM job_descriptions WHERE job_id = ANY(%s)",
+            (list(facts),)):
+        facts[job_id].descriptions.append(description)
+        facts[job_id].languages.add(language)
     jobs = list(facts.values())
     borrow_twin_descriptions(jobs)
     return jobs

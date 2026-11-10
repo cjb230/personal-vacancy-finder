@@ -137,6 +137,16 @@ def _rekey_jobs(conn: psycopg.Connection) -> int:
             """,
             {"keep": keep, "others": others},
         )
+        # Likewise text James pasted for any of them (the latest), unless the kept job has some.
+        conn.execute(
+            """
+            UPDATE job_descriptions SET job_id = %(keep)s
+            WHERE job_id = (SELECT job_id FROM job_descriptions WHERE job_id = ANY(%(others)s)
+                            ORDER BY pasted_at DESC LIMIT 1)
+              AND NOT EXISTS (SELECT 1 FROM job_descriptions WHERE job_id = %(keep)s)
+            """,
+            {"keep": keep, "others": others},
+        )
         conn.execute("DELETE FROM jobs WHERE id = ANY(%s)", (others,))
         merged += len(others)
     conn.execute("UPDATE jobs SET fingerprint = 'tmp:' || id")

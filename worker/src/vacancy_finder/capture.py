@@ -82,6 +82,23 @@ def save_capture(conn: psycopg.Connection, url: str, description: str,
     return external_id, [(job_id, title) for job_id, title in jobs]
 
 
+def save_job_description(conn: psycopg.Connection, job_id: int, text: str) -> str:
+    """Store (or replace) advert text pasted on the results page for one job, any source.
+    Returns the cleaned text. Raises ValueError when nothing is left after cleaning."""
+    description = clean_description(text)
+    if not description:
+        raise ValueError("The description is empty.")
+    conn.execute(
+        """
+        INSERT INTO job_descriptions (job_id, description, language) VALUES (%s, %s, %s)
+        ON CONFLICT (job_id) DO UPDATE SET
+            description = EXCLUDED.description, language = EXCLUDED.language, pasted_at = now()
+        """,
+        (job_id, description, detect_language(description)),
+    )
+    return description
+
+
 # The bookmarklet, before ORIGIN is filled in. One line, and no "%": browsers percent-decode
 # javascript: URLs. It posts a form to a new tab rather than calling fetch(), so the result
 # page shows whether it worked.

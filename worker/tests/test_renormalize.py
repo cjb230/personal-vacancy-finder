@@ -63,6 +63,24 @@ def test_unknown_company_and_placeholder_titles_stay_separate(conn):  # noqa: F8
     assert count(conn, "SELECT count(*) FROM jobs") == 3
 
 
+def test_pasted_description_follows_a_merged_job(conn):  # noqa: F811
+    source = ensure_source(conn, "test", "Test", "board")
+    upsert_posting(conn, source, posting("1", "Orbit"))
+    conn.commit()
+    keep, company = conn.execute("SELECT id, company_id FROM jobs").fetchone()
+    # A second job under an old key holds the pasted text; the current rules merge the two.
+    other = conn.execute(
+        "INSERT INTO jobs (company_id, title, fingerprint) VALUES (%s, 'Engineering Manager', 'old')"
+        " RETURNING id", (company,)).fetchone()[0]
+    conn.execute("INSERT INTO job_descriptions (job_id, description) VALUES (%s, 'Pasted text')",
+                 (other,))
+    conn.commit()
+
+    assert renormalize(conn) == (0, 1)
+    assert conn.execute("SELECT job_id, description FROM job_descriptions").fetchall() == [
+        (keep, "Pasted text")]
+
+
 def test_jobs_without_postings_are_removed(conn):  # noqa: F811
     from datetime import UTC, datetime
 
