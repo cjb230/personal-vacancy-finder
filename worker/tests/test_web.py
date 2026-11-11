@@ -390,6 +390,64 @@ def test_tailor_cv_button_starts_a_run_and_keeps_its_link(conn, monkeypatch):  #
     assert count(conn, "SELECT count(*) FROM job_tailorings") == 2
 
 
+def test_marking_interested_starts_tailoring_once(conn, monkeypatch):  # noqa: F811
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    import httpx
+
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    monkeypatch.setattr(web, "TAILOR_API_URL", "http://tailor.test")
+    monkeypatch.setattr(web, "TAILOR_BROWSER_URL", "https://tailor.example:8091")
+    source = ensure_source(conn, "test", "Test board", "board")
+    for n, title in ((1, "Engineering Manager"), (2, "Staff Engineer")):
+        upsert_posting(conn, source, RawPosting(
+            external_id=str(n), url=f"https://x.example/{n}", title=title, company_name=f"Orbit {n}",
+            location_text="Remote, Europe", work_mode="remote",
+            description="Python and PostgreSQL for satellite imagery. You will lead the team."))
+    conn.commit()
+    score_all(conn)
+    first, second = (row[0] for row in conn.execute("SELECT id FROM jobs ORDER BY id"))
+
+    sent = []
+    replies = iter([httpx.Response(202, json={"id": "run-1", "status": "queued"})])
+
+    def fake_post(url, json, timeout):
+        sent.append(json)
+        return next(replies)
+
+    monkeypatch.setattr(web.httpx, "post", fake_post)
+    # Other decisions start nothing; Interested starts a run, and only the first time.
+    assert web.review(first, "not_interested") is None and sent == []
+    assert web.review(first, "interested") is None
+    assert sent == [{"url": "https://x.example/1"}]
+    assert web.review(first, "interested") is None  # already has a run: no second paid run
+    web.review(first, "applied")
+    assert web.review(first, "interested") is None
+    assert len(sent) == 1
+    assert "CV draft" in web.render("interested", "", 0)
+
+    # When the API can't be reached the job is still marked, and the reason is returned.
+    def unreachable(url, json, timeout):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(web.httpx, "post", unreachable)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with httpx.Client() as client:  # not httpx.post, which is patched above
+            response = client.post(f"http://127.0.0.1:{server.server_address[1]}/review", data={
+                "job_id": second, "decision": "interested", "back": f"/?view=match#job-{second}"})
+    finally:
+        server.shutdown()
+    assert response.status_code == 502
+    assert "Marked interested" in response.text and "Could not reach" in response.text
+    assert f'href="/?view=match#job-{second}"' in response.text
+    assert conn.execute("SELECT decision FROM job_reviews WHERE job_id = %s",
+                        (second,)).fetchone() == ("interested",)
+    assert count(conn, "SELECT count(*) FROM job_tailorings") == 1
+
+
 def test_paste_description_for_a_job_without_one(conn, monkeypatch):  # noqa: F811
     monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
     source = ensure_source(conn, "test", "Test board", "board")

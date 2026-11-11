@@ -11,7 +11,8 @@ Interested, Applied and Missed jobs show when a source last confirmed their adve
 has gone; interested jobs whose adverts go move to Missed. /capture installs a bookmarklet that
 sends the description of a LinkedIn job open in James's browser (see capture.py). Interested jobs
 get a "Tailor CV" button that starts a CV tailoring run on the Tailor API (tailor-api.md in the
-cv-creator repo) and keeps the link to the run's status page. Open jobs with no advert text get a
+cv-creator repo) and keeps the link to the run's status page; marking a job interested starts
+that run automatically if the job has none yet. Open jobs with no advert text get a
 "Paste description" button opening a dialog whose text is saved as the job's description
 (job_descriptions) before the job is rescored. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
@@ -772,6 +773,27 @@ def save_review(job_id: int, decision: str, applied_at: datetime | None = None,
             conn.execute("DELETE FROM job_reviews WHERE job_id = %s", (job_id,))
 
 
+def review(job_id: int, decision: str, applied_at: datetime | None = None,
+           application_dir: str = "") -> str | None:
+    """Save a decision clicked on the page. Marking a job interested also starts its CV
+    tailoring run, unless it has had one already, so it is started at most once per job
+    (Tailor again forces another). Returns why tailoring could not be started, else None;
+    the decision is saved either way."""
+    save_review(job_id, decision, applied_at, application_dir)
+    if decision != "interested":
+        return None
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM job_tailorings WHERE job_id = %s LIMIT 1",
+                        (job_id,)).fetchone():
+            return None
+    try:
+        start_tailoring(job_id)
+    except TailorError as e:
+        log.warning("Tailoring for job %d not started on marking interested: %s", job_id, e)
+        return str(e)
+    return None
+
+
 _HOST = re.compile(r"^[A-Za-z0-9.\-]+(:\d+)?$|^\[[0-9A-Fa-f:]+\](:\d+)?$")
 
 
@@ -906,7 +928,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.BAD_REQUEST)
                 return
             folder = form.get("application_dir", [""])[0].strip()[:DIR_MAX]
-            save_review(key, decision, applied_at, folder)
+            if problem := review(key, decision, applied_at, folder):
+                self._send(HTTPStatus.BAD_GATEWAY, page(
+                    "CV tailoring not started",
+                    "<h2>Marked interested, but CV tailoring not started</h2>"
+                    f"<p>{esc(problem)}</p><p>Use the Tailor CV button on the job to try again.</p>"
+                    f'<p><a href="{esc(safe_back(back))}">Back to the list</a></p>'))
+                return
         elif path == "/feedback":
             kind = form.get("kind", [""])[0]
             note = form.get("note", [""])[0].strip()[:NOTE_MAX]
