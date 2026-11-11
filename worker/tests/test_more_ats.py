@@ -10,6 +10,7 @@ import pytest
 
 from vacancy_finder.collectors.ats import TrackedCompany
 from vacancy_finder.collectors.more_ats import (
+    ComeetCollector,
     PersonioCollector,
     RecruiteeCollector,
     TeamtailorCollector,
@@ -142,3 +143,26 @@ def test_page_location():
 def test_page_needs_pattern():
     with pytest.raises(ValueError):
         list(PageCollector().parse("<html></html>", company("https://x.example/careers")))
+
+
+def test_comeet():
+    page = (FIXTURES / "comeet.html").read_text()
+    collector = ComeetCollector()
+    assert collector.feed_url("ledgebrook/D9.006") == "https://www.comeet.com/jobs/ledgebrook/D9.006"
+    postings = {p.title: p for p in collector.parse(page, company("ledgebrook/D9.006"))}
+    assert set(postings) == {"Staff Engineer", "Full Stack Engineer"}  # the internal one is skipped
+    staff = postings["Staff Engineer"]
+    assert staff.external_id == "ledgebrook/D9.006:CA.17C"
+    assert staff.url == "https://www.comeet.com/jobs/ledgebrook/D9.006/staff-engineer/CA.17C"
+    assert staff.company_name == "Acme Space"
+    assert staff.location_text == "Remote - US or Canada" and staff.work_mode == "remote"
+    assert staff.contract_type == "Full-time"
+    assert staff.description.startswith("Description\nLedgebrook is an AI-native")
+    assert "<p" not in staff.description
+    assert (staff.ats_kind, staff.ats_slug) == ("comeet", "ledgebrook/D9.006")
+    assert postings["Full Stack Engineer"].location_text == "Remote - Poland"
+
+
+def test_comeet_page_without_positions_is_an_error():
+    with pytest.raises(ValueError):
+        list(ComeetCollector().parse("<html>Not found</html>", company("ledgebrook/D9.006")))

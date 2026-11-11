@@ -4,8 +4,9 @@ from decimal import Decimal
 
 import pytest
 
-from vacancy_finder.matching import (JobFacts, b2b_take_home, monthly_pln, pay_points,
-                                     required_languages, score_job, take_home, uop_take_home)
+from vacancy_finder.matching import (JobFacts, b2b_take_home, merge_employer_adverts, monthly_pln,
+                                     pay_points, required_languages, score_job, take_home,
+                                     uop_take_home)
 
 
 def job(title, *, description="We use Python and PostgreSQL. You will lead the team.", company="Acme",
@@ -296,3 +297,67 @@ def test_hn_staff_engineer_counts_as_software():
     assert score_job(job(title, pay=Decimal(48000))).verdict == "maybe"
     hn = score_job(job(title, pay=Decimal(48000), sources=("hn-whoishiring",)))
     assert hn.verdict == "match"
+
+
+def facts_with_id(job_id, *args, **kwargs):
+    facts = job(*args, **kwargs)
+    facts.job_id = job_id
+    return facts
+
+
+def test_employer_advert_is_definitive():
+    # Ledgebrook's Staff Engineer: Himalayas says Poland, the employer's own page says US/Canada.
+    board = facts_with_id(1, "Staff Engineer", company="Ledgebrook", locations=("Poland",),
+                          description="Board copy of the advert.", sources=("himalayas",),
+                          pay=Decimal(30000))
+    own = facts_with_id(1, "Staff Engineer", company="Ledgebrook",
+                        locations=("Remote - US or Canada",), description="Employer text.",
+                        sources=("comeet",))
+    [merged] = merge_employer_adverts({1: board}, {1: own})
+    assert merged.locations == ["Remote - US or Canada"]
+    assert merged.descriptions == ["Employer text."]
+    assert merged.sources == {"himalayas", "comeet"}
+    assert merged.take_home_max == Decimal(30000)  # the employer gave no pay: the board's stands
+    assert merged.employer_advert == ""
+    result = score_job(merged)
+    assert result.verdict == "no"
+    assert any("only for the US/North America" in r for r in result.reasons)
+    assert "checked against the employer's advert" in result.reasons
+
+
+def test_employer_advert_keeps_board_facts_it_lacks():
+    board = facts_with_id(1, "Staff Engineer", company="Acme", locations=("Poland",),
+                          description="Board text.", sources=("himalayas",))
+    own = facts_with_id(1, "Staff Engineer", company="Acme", modes=("unknown",), locations=(),
+                        description=None, languages=(None,), sources=("page",))
+    [merged] = merge_employer_adverts({1: board}, {1: own})
+    assert merged.locations == ["Poland"] and merged.work_modes == {"remote"}
+    assert merged.descriptions == ["Board text."] and merged.languages == {"en"}
+
+
+def test_employer_twin_with_a_slightly_different_title():
+    board = facts_with_id(1, "Staff Engineer - Platform", company="Acme", locations=("Poland",),
+                          sources=("himalayas",))
+    own = facts_with_id(2, "Staff Platform Engineer", company="Acme",
+                        locations=("Remote - US or Canada",), sources=("comeet",))
+    merged = {j.job_id: j for j in merge_employer_adverts({1: board}, {2: own})}
+    assert merged[1].locations == ["Remote - US or Canada"]
+    assert merged[1].employer_advert == "Staff Platform Engineer"
+    assert merged[2].employer_advert is None  # only ever seen on the employer's page
+    assert ("employer's advert used (listed there as \"Staff Platform Engineer\")"
+            in score_job(merged[1]).reasons)
+
+
+def test_job_missing_from_the_employers_page_keeps_its_score():
+    def board():
+        return facts_with_id(1, "Head of Data Engineering", company="Acme", locations=("Poland",),
+                             sources=("himalayas",))
+    own = facts_with_id(2, "Underwriter", company="Acme", sources=("comeet",))
+    merged = {j.job_id: j for j in merge_employer_adverts({1: board()}, {2: own})}
+    assert merged[1].employer_missing and merged[1].locations == ["Poland"]
+    flagged, plain = score_job(merged[1]), score_job(board())
+    assert (flagged.verdict, flagged.score) == (plain.verdict, plain.score)
+    assert "not on the employer's careers page: check the advert" in flagged.reasons
+    # A company with no employer adverts collected says nothing either way.
+    [alone] = merge_employer_adverts({1: board()}, {})
+    assert not alone.employer_missing and alone.employer_advert is None

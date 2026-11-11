@@ -31,3 +31,12 @@ def test_unquotes_ashby_slugs():
 
 def test_empty_text():
     assert find_boards(None) == set()
+
+
+def test_finds_comeet_boards_from_an_advert_link():
+    link = ("https://www.comeet.com/jobs/ledgebrook/D9.006/staff-engineer/CA.17C"
+            "?utm_source=himalayas.app&ref=himalayas.app")
+    assert find_boards(link) == {("comeet", "ledgebrook/D9.006")}
+    assert find_boards("https://www.comeet.com/jobs/ledgebrook/D9.006") == {
+        ("comeet", "ledgebrook/D9.006")}
+    assert find_boards("https://www.comeet.com/resources/blog") == set()

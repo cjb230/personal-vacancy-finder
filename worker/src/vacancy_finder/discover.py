@@ -33,6 +33,8 @@ BOARD_PATTERNS = [
     ("recruitee", re.compile(r"//([a-z0-9-]+)\.recruitee\.com", re.I)),
     ("traffit", re.compile(r"//([a-z0-9-]+)\.traffit\.com", re.I)),
     ("teamtailor", re.compile(r"//([a-z0-9-]+\.teamtailor\.com)", re.I)),
+    # Comeet's company slug and its id, e.g. comeet.com/jobs/ledgebrook/D9.006/staff-engineer/...
+    ("comeet", re.compile(r"comeet\.com?/jobs/([a-z0-9-]+/[0-9A-F]{2}\.[0-9A-F]{3})\b", re.I)),
 ]
 
 # Path parts and subdomains that belong to the ATS itself, not to a company.

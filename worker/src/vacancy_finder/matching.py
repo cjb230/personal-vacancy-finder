@@ -283,6 +283,11 @@ class JobFacts:
     sources: set[str] = field(default_factory=set)
     take_home_max: Decimal | None = None  # monthly take-home in PLN, best of the postings
     twin_title: str | None = None  # the job whose advert text this one borrowed, if any
+    # The employer's own advert that overrode the boards' copies: "" when it is one of this
+    # job's postings, else the title of the same job on the employer's careers page.
+    employer_advert: str | None = None
+    # The company's careers page is collected but doesn't list this job.
+    employer_missing: bool = False
 
 
 @dataclass
@@ -449,6 +454,12 @@ def score_job(job: JobFacts) -> Score:
         reasons.append("no description collected: check the advert")
     elif job.twin_title:
         reasons.append(f"advert text taken from the same job listed as \"{job.twin_title}\"")
+    if job.employer_advert == "":
+        reasons.append("checked against the employer's advert")
+    elif job.employer_advert:
+        reasons.append(f"employer's advert used (listed there as \"{job.employer_advert}\")")
+    elif job.employer_missing:
+        reasons.append("not on the employer's careers page: check the advert")
 
     if blockers:
         return Score("no", points, role_level, blockers + reasons)
@@ -504,7 +515,8 @@ def load_facts(conn: psycopg.Connection, job_ids: list[int] | None = None) -> li
         SELECT j.id, j.title, c.name, COALESCE(c.sectors, '{}'), COALESCE(c.excluded, false),
                p.work_mode, p.location_text, COALESCE(p.description, pc.description),
                COALESCE(p.language, pc.language), p.contract_type,
-               p.salary_max, p.salary_min, p.salary_currency, p.salary_period, p.raw, s.key
+               p.salary_max, p.salary_min, p.salary_currency, p.salary_period, p.raw, s.key,
+               s.kind
         FROM jobs j
         JOIN postings p ON p.job_id = j.id AND p.closed_at IS NULL
         JOIN sources s ON s.id = p.source_id
@@ -518,9 +530,12 @@ def load_facts(conn: psycopg.Connection, job_ids: list[int] | None = None) -> li
         """,
         {"ids": job_ids},
     ).fetchall()
-    facts: dict[int, JobFacts] = {}
+    # The employer's own careers pages (kind 'ats') apart from boards, aggregators and alerts.
+    boards: dict[int, JobFacts] = {}
+    employer: dict[int, JobFacts] = {}
     for (job_id, title, company, sectors, excluded, mode, location, description, language,
-         contract, salary_max, salary_min, currency, period, raw, source) in rows:
+         contract, salary_max, salary_min, currency, period, raw, source, kind) in rows:
+        facts = employer if kind == "ats" else boards
         job = facts.get(job_id)
         if job is None:
             job = facts[job_id] = JobFacts(job_id, title, company, list(sectors), excluded)
@@ -539,15 +554,70 @@ def load_facts(conn: psycopg.Connection, job_ids: list[int] | None = None) -> li
             pay = take_home(pay, contract)
             if job.take_home_max is None or pay > job.take_home_max:
                 job.take_home_max = pay
+    jobs = merge_employer_adverts(boards, employer)
+    by_id = {job.job_id: job for job in jobs}
     # Text James pasted on the results page for a job that had none (web.py).
     for job_id, description, language in conn.execute(
             "SELECT job_id, description, language FROM job_descriptions WHERE job_id = ANY(%s)",
-            (list(facts),)):
-        facts[job_id].descriptions.append(description)
-        facts[job_id].languages.add(language)
-    jobs = list(facts.values())
+            (list(by_id),)):
+        by_id[job_id].descriptions.append(description)
+        by_id[job_id].languages.add(language)
     borrow_twin_descriptions(jobs)
     return jobs
+
+
+def _adopt(job: JobFacts, own: JobFacts) -> None:
+    """Take every fact the employer's advert gives over the boards' versions of it; keep the
+    boards' facts where the employer's page is silent (a careers page with no pay, say)."""
+    if modes := own.work_modes - {"unknown"}:
+        job.work_modes = set(modes)
+    if own.locations:
+        job.locations = list(own.locations)
+    if own.descriptions:
+        job.descriptions = list(own.descriptions)
+        job.languages = set(own.languages)
+        job.required_languages = set(own.required_languages)
+    if own.contract_types:
+        job.contract_types = set(own.contract_types)
+    if own.take_home_max is not None:
+        job.take_home_max = own.take_home_max
+
+
+def merge_employer_adverts(boards: dict[int, JobFacts],
+                           employer: dict[int, JobFacts]) -> list[JobFacts]:
+    """Combine each job's facts from boards (Himalayas, alerts, ...) with those from the
+    employer's own careers page, which win wherever they say something: a board's copy can be
+    out of date or plain wrong about where the employer hires. A job seen only on boards takes
+    the facts of the same job on the employer's page when the titles differ slightly (the twin
+    rule borrow_twin_descriptions uses); if the employer's page is collected but has no such
+    job, the job is flagged, not ruled out, since the titles may differ more than that."""
+    jobs = dict(boards)
+    for job_id, own in employer.items():
+        job = jobs.get(job_id)
+        if job is None:
+            jobs[job_id] = own
+            continue
+        _adopt(job, own)
+        job.sources |= own.sources
+        job.employer_advert = ""
+    by_company: dict[str, list[JobFacts]] = defaultdict(list)
+    for own in employer.values():
+        if own.company:
+            by_company[normalize_company(own.company)].append(own)
+    for job_id, job in jobs.items():
+        if job_id in employer or not job.company:
+            continue
+        candidates = by_company.get(normalize_company(job.company))
+        if not candidates:
+            continue  # the employer's page isn't collected: nothing to say
+        scored = sorted(((title_similarity(job.title, o.title), o.job_id, o) for o in candidates),
+                        key=lambda t: (t[0], -t[1]), reverse=True)
+        if scored[0][0] < TWIN_SIMILARITY:
+            job.employer_missing = True
+        elif len(scored) == 1 or scored[1][0] < scored[0][0]:
+            _adopt(job, scored[0][2])
+            job.employer_advert = scored[0][2].title
+    return sorted(jobs.values(), key=lambda j: j.job_id)
 
 
 # Seniority words that must agree for two titles to be the same job.

@@ -14,7 +14,10 @@ get a "Tailor CV" button that starts a CV tailoring run on the Tailor API (tailo
 cv-creator repo) and keeps the link to the run's status page; marking a job interested starts
 that run automatically if the job has none yet. Open jobs with no advert text get a
 "Paste description" button opening a dialog whose text is saved as the job's description
-(job_descriptions) before the job is rescored. Served by the worker on WEB_PORT (8080), which
+(job_descriptions) before the job is rescored. Interested and Maybe Himalayas jobs whose
+employer's careers page isn't followed get an "Employer link" button: the Apply address James
+pastes starts following that page, whose adverts then override Himalayas' copies when scoring
+(matching.merge_employer_adverts). Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -36,7 +39,11 @@ import httpx
 import psycopg
 
 from .capture import DESCRIPTION_MAX, bookmarklet, save_capture, save_job_description
+from .collectors import COLLECTORS
+from .collectors.ats import USER_AGENT, TrackedCompany
+from .discover import find_boards
 from .matching import score_jobs
+from .store import ensure_source, upsert_posting
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +143,14 @@ SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.dec
            LEFT JOIN page_captures pc ON pc.external_id = p.external_id AND so.kind = 'email'
            WHERE p.job_id = j.id AND p.closed_at IS NULL
              AND NULLIF(COALESCE(p.description, pc.description), '') IS NOT NULL) AS lacks_text,
-       (SELECT d.description FROM job_descriptions d WHERE d.job_id = j.id) AS pasted
+       (SELECT d.description FROM job_descriptions d WHERE d.job_id = j.id) AS pasted,
+       -- A Himalayas job whose employer's careers page isn't followed yet: its advert there
+       -- can only be found from the Apply link, which James pastes (Employer link).
+       EXISTS (SELECT 1 FROM postings p JOIN sources so ON so.id = p.source_id
+               WHERE p.job_id = j.id AND p.closed_at IS NULL AND so.key = 'himalayas')
+       AND NOT EXISTS (SELECT 1 FROM postings p JOIN sources so ON so.id = p.source_id
+                       WHERE p.job_id = j.id AND p.closed_at IS NULL AND so.kind = 'ats')
+       AND NOT COALESCE(c.tracked AND c.ats_kind IS NOT NULL, false) AS needs_employer
 FROM jobs j
 JOIN job_scores s ON s.job_id = j.id
 LEFT JOIN job_reviews r ON r.job_id = j.id
@@ -250,16 +264,18 @@ main { padding:8px 20px 40px; max-width:1100px; }
 .pager { margin-top:16px; } .empty { color:var(--muted); padding:24px 0; }
 .meta button.describe { font-size:12px; margin-left:6px; padding:1px 8px; border:1px solid var(--line);
   border-radius:6px; background:var(--bg); color:var(--accent); cursor:pointer; }
-dialog.describe { width:min(720px, calc(100vw - 32px)); border:1px solid var(--line);
+dialog.popup { width:min(720px, calc(100vw - 32px)); border:1px solid var(--line);
   border-radius:10px; background:var(--bg); color:var(--fg); padding:16px; }
-dialog.describe::backdrop { background:rgba(0,0,0,.4); }
-dialog.describe h3 { margin:0 0 8px; font-size:16px; }
-dialog.describe textarea { width:100%; min-height:300px; font:inherit; font-size:14px; padding:6px;
-  border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
-dialog.describe .buttons { margin-top:8px; display:flex; gap:8px; justify-content:flex-end; }
-dialog.describe button { font-size:13px; padding:4px 12px; border:1px solid var(--line);
+dialog.popup::backdrop { background:rgba(0,0,0,.4); }
+dialog.popup h3 { margin:0 0 8px; font-size:16px; }
+dialog.popup p { margin:0 0 8px; font-size:13px; color:var(--muted); }
+dialog.popup textarea, dialog.popup input[type=url] { width:100%; font:inherit; font-size:14px;
+  padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+dialog.popup textarea { min-height:300px; }
+dialog.popup .buttons { margin-top:8px; display:flex; gap:8px; justify-content:flex-end; }
+dialog.popup button { font-size:13px; padding:4px 12px; border:1px solid var(--line);
   border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; }
-dialog.describe button.save { background:var(--accent); color:#fff; border-color:var(--accent); }
+dialog.popup button.save { background:var(--accent); color:#fff; border-color:var(--accent); }
 @media (max-width:600px) { .meta, .reasons, .actions, .feedback, .notes, .apply, .applied, .tailor { margin-left:0; } }
 """
 
@@ -356,7 +372,10 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     for (job_id, job_title, company, verdict, score, level, reasons, decision, first_seen,
          closes_at, is_deadline, closed_already, applied_at, application_dir, url, locations,
          sources, checkable, confirmed_at, ad_gone_at, last_seen, reviewed_at, lacks_text,
-         pasted) in rows:
+         pasted, needs_employer) in rows:
+        # Checking against the employer's advert matters for jobs James might go for.
+        ask_employer = needs_employer and (decision == "interested" or (
+            decision is None and verdict == "maybe"))
         # "Applied" opens a form asking when and where the application is, instead of saving.
         buttons = "".join(
             f'<button type="button" onclick="openApply({job_id})" class="{"on" if decision == key else ""}">'
@@ -376,7 +395,8 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
   <div class="meta">{render_locations(locations)} · {esc(sources)} ·
     first seen {first_seen:%d %b %H:%M}{render_closing(closes_at, is_deadline, closed_already)}{
     render_confirmed(checkable, confirmed_at, ad_gone_at, last_seen) if view in CONFIRMED_VIEWS else ""}{
-    render_describe(job_id, job_title, pasted, back) if lacks_text or pasted is not None else ""}</div>
+    render_describe(job_id, job_title, pasted, back) if lacks_text or pasted is not None else ""}{
+    render_employer_link(job_id, company, back) if ask_employer else ""}</div>
   <div class="reasons">{chips}</div>
   <form class="actions" method="post" action="/review">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -538,7 +558,7 @@ def render_describe(job_id: int, title: str, pasted: str | None, back: str) -> s
     label = "Replace description" if pasted is not None else "Paste description"
     return (f'<button type="button" class="describe" '
             f'onclick="document.getElementById(\'describe-{job_id}\').showModal()">{label}</button>'
-            f'<dialog class="describe" id="describe-{job_id}">'
+            f'<dialog class="popup" id="describe-{job_id}">'
             f'<form method="post" action="/describe"><h3>Description: {esc(title)}</h3>'
             f'<input type="hidden" name="job_id" value="{job_id}">'
             f'<input type="hidden" name="back" value="{back}">'
@@ -554,6 +574,80 @@ def save_description(job_id: int, text: str) -> None:
         save_job_description(conn, job_id, text)
         conn.commit()
         score_jobs(conn, [job_id])
+
+
+def render_employer_link(job_id: int, company: str | None, back: str) -> str:
+    """The "Employer link" button for a Himalayas job whose employer's careers page isn't
+    followed, and its dialog: one box for the address the advert's Apply button leads to."""
+    return (f'<button type="button" class="describe" title="Check this advert against the '
+            f'employer\'s own careers page" onclick="document.getElementById(\'employer-{job_id}\')'
+            f'.showModal()">Employer link</button>'
+            f'<dialog class="popup" id="employer-{job_id}">'
+            f'<form method="post" action="/employer-link"><h3>Employer link: {esc(company)}</h3>'
+            "<p>Open the advert on Himalayas, click Apply, and paste the address it takes you to. "
+            "The employer's careers page is then followed, and its adverts override Himalayas' "
+            "copies when scoring.</p>"
+            f'<input type="hidden" name="job_id" value="{job_id}">'
+            f'<input type="hidden" name="back" value="{back}">'
+            '<input type="url" name="url" required aria-label="Employer link" '
+            'placeholder="https://www.comeet.com/jobs/... or https://jobs.lever.co/...">'
+            '<div class="buttons"><button formmethod="dialog" formnovalidate>Cancel</button>'
+            '<button class="save">Save and check</button></div></form></dialog>')
+
+
+class EmployerLinkError(Exception):
+    """The careers page was saved but could not be read now; the message is shown."""
+
+
+def employer_client() -> httpx.Client:
+    return httpx.Client(timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True)
+
+
+def save_employer_link(job_id: int, url: str,
+                       client: httpx.Client | None = None) -> tuple[str, int]:
+    """Follow the careers page an advert's Apply link points to, for the job's company: the
+    company is tracked on that system from now on, its adverts are collected at once and the
+    company's jobs rescored, so the employer's version of each advert counts straight away.
+    Returns the company's name and how many adverts were found. Raises ValueError for a link
+    to no careers system we read, and EmployerLinkError if the page couldn't be read now (the
+    company stays tracked, so the next careers-page run tries again)."""
+    boards = find_boards(url)
+    if len(boards) != 1:
+        raise ValueError("That isn't a link to a careers page the finder can read (Greenhouse, "
+                         "Lever, Ashby, Workable, Personio, Recruitee, Teamtailor, Traffit or "
+                         "Comeet).")
+    kind, slug = boards.pop()
+    collector = next(c for c in COLLECTORS if c.source_key == kind)
+    with connect() as conn:
+        row = conn.execute("SELECT c.id, c.name FROM jobs j JOIN companies c ON c.id = j.company_id"
+                           " WHERE j.id = %s", (job_id,)).fetchone()
+        if row is None:
+            raise ValueError("This job has no company to link a careers page to.")
+        company = TrackedCompany(row[0], row[1], slug)
+        conn.execute("UPDATE companies SET ats_kind = %s, ats_slug = %s, tracked = true"
+                     " WHERE id = %s", (kind, slug, company.id))
+        conn.commit()
+        own_client = client is None
+        client = client or employer_client()
+        try:
+            postings = list(collector.parse(collector.fetch_company(client, company), company))
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+            raise EmployerLinkError(
+                f"{company.name} is now followed on {collector.source_name}, but its careers page "
+                f"couldn't be read just now ({e}). It will be tried again on the next "
+                "careers-page run.") from e
+        finally:
+            if own_client:
+                client.close()
+        source_id = ensure_source(conn, collector.source_key, collector.source_name,
+                                  collector.source_kind)
+        for posting in postings:
+            upsert_posting(conn, source_id, posting)
+        conn.commit()
+        score_jobs(conn, [job_id])
+    log.info("Employer link for job %d: %s on %s (%s), %d adverts", job_id, company.name, kind,
+             slug, len(postings))
+    return company.name, len(postings)
 
 
 def render_tailor(job_id: int, latest: tuple[str, datetime] | None, back: str) -> str:
@@ -903,7 +997,8 @@ class Handler(BaseHTTPRequestHandler):
             length = min(int(self.headers.get("Content-Length") or 0), 400_000)
             self._send(*capture(parse_qs(self.rfile.read(length).decode(errors="replace"))))
             return
-        if path not in ("/review", "/feedback", "/feedback/delete", "/tailor", "/describe"):
+        if path not in ("/review", "/feedback", "/feedback/delete", "/tailor", "/describe",
+                        "/employer-link"):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         # A pasted description is form-encoded, so allow for several bytes per character.
@@ -960,6 +1055,17 @@ class Handler(BaseHTTPRequestHandler):
                     f'<p><a href="{esc(safe_back(back))}">Back to the list</a></p>'))
                 return
             log.info("Pasted a description for job %d", key)
+        elif path == "/employer-link":
+            try:
+                save_employer_link(key, form.get("url", [""])[0].strip())
+            except (ValueError, EmployerLinkError) as e:
+                bad = isinstance(e, ValueError)
+                self._send(HTTPStatus.BAD_REQUEST if bad else HTTPStatus.BAD_GATEWAY, page(
+                    "Employer link not saved" if bad else "Careers page not read",
+                    f"<h2>{'Employer link not saved' if bad else 'Careers page not read yet'}</h2>"
+                    f"<p>{esc(e)}</p>"
+                    f'<p><a href="{esc(safe_back(back))}">Back to the list</a></p>'))
+                return
         else:
             delete_feedback(key)
         self.send_response(HTTPStatus.SEE_OTHER)
