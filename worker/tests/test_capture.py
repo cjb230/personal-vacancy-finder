@@ -156,5 +156,6 @@ def test_linkedin_job_borrows_text_from_the_company_board(conn):  # noqa: F811
     conn.commit()
     assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == 2  # not merged
     score_all(conn)
-    assert ('advert text taken from the same job listed as "Senior Engineering Manager (Imagery)"'
+    # The twin is the employer's own advert, so it stands in for the alert entirely.
+    assert ('employer\'s advert used (listed there as "Senior Engineering Manager (Imagery)")'
             in reasons(conn, "Sr. Engineering Manager, Imagery"))

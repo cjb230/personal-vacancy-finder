@@ -1,4 +1,5 @@
-"""Collectors for more hosted careers systems: Personio, Teamtailor, Recruitee and Traffit.
+"""Collectors for more hosted careers systems: Personio, Teamtailor, Recruitee, Traffit and
+Comeet.
 
 Like the collectors in ats.py, each polls the tracked companies whose ats_kind matches.
 What goes in ats_slug differs by system, because their feed addresses do:
@@ -7,8 +8,11 @@ What goes in ats_slug differs by system, because their feed addresses do:
 - teamtailor: the careers site, e.g. "jobs.tibber.com" or "www.engineering-jobs.sener/en"
 - recruitee:  the company slug, e.g. "up42gmbh"
 - traffit:    the company slug, e.g. "cloudferro"
+- comeet:     the company slug and Comeet's id for it, e.g. "ledgebrook/D9.006"
 """
 
+import json
+import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from datetime import datetime
@@ -220,9 +224,67 @@ def _warsaw(value: datetime | None) -> datetime | None:
     return value.replace(tzinfo=ZoneInfo("Europe/Warsaw")) if value and not value.tzinfo else value
 
 
+class ComeetCollector(AtsCollector):
+    """A company's Comeet careers page, www.comeet.com/jobs/<slug>/<id>. The page carries every
+    open position, with its full advert text, as JSON in a script (COMPANY_POSITIONS_DATA), so
+    one request covers the company. robots.txt allows it; only the ?utm_ versions are barred.
+    The id can't be guessed from the name, so a company is added from a link to one of its
+    adverts (the Employer link button on the results page, or discover.py)."""
+
+    source_key = "comeet"
+    source_name = "Comeet careers pages"
+    _MODES = {"remote": "remote", "hybrid": "hybrid", "on-site": "onsite", "onsite": "onsite"}
+    # The page declares the variable first ("var COMPANY_POSITIONS_DATA ;"), then sets it.
+    _POSITIONS = re.compile(r"COMPANY_POSITIONS_DATA\s*=\s*(?=\[)")
+
+    def feed_url(self, slug: str) -> str:
+        return f"https://www.comeet.com/jobs/{slug}"
+
+    def fetch(self, client: httpx.Client, slug: str) -> Any:
+        response = client.get(self.feed_url(slug))
+        response.raise_for_status()
+        return response.text
+
+    def parse(self, payload: str, company: TrackedCompany) -> Iterable[RawPosting]:
+        m = self._POSITIONS.search(payload or "")
+        if not m:
+            raise ValueError("no positions on the Comeet page")
+        positions, _ = json.JSONDecoder().raw_decode(payload, m.end())
+        for position in positions:
+            if position.get("is_internal"):
+                continue
+            location = position.get("location") or {}
+            place = clean(location.get("name")) or ", ".join(
+                p for p in (location.get("city"), location.get("country")) if p) or None
+            mode = self._MODES.get((position.get("workplace_type") or "").strip().lower()) or (
+                "remote" if location.get("is_remote") else guess_work_mode(place))
+            details = sorted((position.get("custom_fields") or {}).get("details") or [],
+                             key=lambda d: d.get("order") or 0)
+            sections = [f"{d['name']}\n{text}" if d.get("name") else text
+                        for d in details if (text := html_to_text(d.get("value")))]
+            yield RawPosting(
+                external_id=f"{company.slug}:{position['uid']}",
+                url=position.get("url_comeet_hosted_page") or position.get("url_active_page")
+                or f"{self.feed_url(company.slug)}/position/{position['uid']}",
+                title=clean(position.get("name")) or "(untitled)",
+                company_name=company.name,
+                location_text=place,
+                work_mode=mode,
+                description="\n\n".join(sections) or None,
+                contract_type=position.get("employment_type"),
+                raw={k: position.get(k) for k in (
+                    "uid", "department", "employment_type", "experience_level", "workplace_type",
+                    "location", "time_updated",
+                )},
+                ats_kind=self.source_key,
+                ats_slug=company.slug,
+            )
+
+
 MORE_ATS_COLLECTORS = [
     PersonioCollector(),
     TeamtailorCollector(),
     RecruiteeCollector(),
     TraffitCollector(),
+    ComeetCollector(),
 ]
