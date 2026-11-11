@@ -516,7 +516,7 @@ def load_facts(conn: psycopg.Connection, job_ids: list[int] | None = None) -> li
                p.work_mode, p.location_text, COALESCE(p.description, pc.description),
                COALESCE(p.language, pc.language), p.contract_type,
                p.salary_max, p.salary_min, p.salary_currency, p.salary_period, p.raw, s.key,
-               s.kind
+               s.kind = 'ats' AND NOT COALESCE(c.aggregator, false) AS from_employer
         FROM jobs j
         JOIN postings p ON p.job_id = j.id AND p.closed_at IS NULL
         JOIN sources s ON s.id = p.source_id
@@ -530,12 +530,13 @@ def load_facts(conn: psycopg.Connection, job_ids: list[int] | None = None) -> li
         """,
         {"ids": job_ids},
     ).fetchall()
-    # The employer's own careers pages (kind 'ats') apart from boards, aggregators and alerts.
+    # The employer's own careers pages (kind 'ats', at a company that isn't an aggregator, whose
+    # board also lists other companies' jobs) apart from boards, aggregators and alerts.
     boards: dict[int, JobFacts] = {}
     employer: dict[int, JobFacts] = {}
     for (job_id, title, company, sectors, excluded, mode, location, description, language,
-         contract, salary_max, salary_min, currency, period, raw, source, kind) in rows:
-        facts = employer if kind == "ats" else boards
+         contract, salary_max, salary_min, currency, period, raw, source, from_employer) in rows:
+        facts = employer if from_employer else boards
         job = facts.get(job_id)
         if job is None:
             job = facts[job_id] = JobFacts(job_id, title, company, list(sectors), excluded)

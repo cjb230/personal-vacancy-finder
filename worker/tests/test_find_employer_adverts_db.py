@@ -112,3 +112,28 @@ def test_finds_follows_and_rescores(conn, monkeypatch):  # noqa: F811
     # Each name is tried once per careers system, and no Himalayas page is fetched.
     assert not any("himalayas.app" in url for url in sites.requests)
     assert len(sites.requests) == len(set(sites.requests))
+
+
+def test_skip_and_aggregator_options(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    staff, ground, _ = setup_jobs(conn)
+    # setup_jobs sets this job's verdict to maybe by hand; rescoring restores the real one,
+    # so compare the score, which only the employer's advert could change.
+    before = conn.execute("SELECT score FROM job_scores WHERE job_id = %s", (ground,)).fetchone()[0]
+    out = []
+    with httpx.Client(transport=httpx.MockTransport(Sites().handler)) as http:
+        companies = run(conn, http, delay=0, say=out.append,
+                        skip=["ledgebrook"], aggregators=["ACME SPACE"])  # any case
+    text = "\n".join(out)
+    assert {c.name for c in companies} == {"Acme Space", "Orbit"}  # Ledgebrook left alone
+    assert "Skipped: Ledgebrook" in text
+    assert conn.execute("SELECT tracked FROM companies WHERE name = 'Ledgebrook'").fetchone() == (
+        False,)
+    assert conn.execute("SELECT tracked, aggregator FROM companies WHERE name = 'Acme Space'"
+                        ).fetchone() == (True, True)
+    assert "now followed as an aggregator" in text
+    # An aggregator's copy is just another board's: it overrides nothing.
+    score, reasons = conn.execute(
+        "SELECT score, reasons FROM job_scores WHERE job_id = %s", (ground,)).fetchone()
+    assert score == before
+    assert not any("employer" in r for r in reasons)

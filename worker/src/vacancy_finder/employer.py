@@ -44,11 +44,14 @@ def lists_any(postings: Iterable[RawPosting], titles: Iterable[str]) -> list[str
 
 
 def follow_careers_page(conn: psycopg.Connection, company: TrackedCompany, kind: str,
-                        postings: list[RawPosting]) -> None:
+                        postings: list[RawPosting], aggregator: bool = False) -> None:
     """Track the company on `kind` (ats_slug = company.slug) from now on and store the adverts
-    already read from its page. Commits; the caller rescores."""
-    conn.execute("UPDATE companies SET ats_kind = %s, ats_slug = %s, tracked = true WHERE id = %s",
-                 (kind, company.slug, company.id))
+    already read from its page. With aggregator, the company is marked as one whose board lists
+    other companies' jobs, so its adverts don't count as definitive. Commits; the caller
+    rescores."""
+    conn.execute("UPDATE companies SET ats_kind = %s, ats_slug = %s, tracked = true,"
+                 " aggregator = aggregator OR %s WHERE id = %s",
+                 (kind, company.slug, aggregator, company.id))
     collector = collector_for(kind)
     source_id = ensure_source(conn, collector.source_key, collector.source_name,
                               collector.source_kind)
