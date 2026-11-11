@@ -22,7 +22,7 @@ import argparse
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 import httpx
@@ -33,6 +33,7 @@ from .collectors.ats import TrackedCompany
 from .discover import find_boards
 from .matching import score_jobs
 from .models import RawPosting
+from .normalize import normalize_company
 from .probe import PROBES, candidate_slugs
 
 log = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ class Company:
     adverts: int = 0
     listed: list[str] = field(default_factory=list)  # titles of our jobs the page lists
     rejected: list[str] = field(default_factory=list)  # boards found that list none of them
+    aggregator: bool = False  # follow its board as an aggregator's, not as definitive
 
 
 def targets(conn: psycopg.Connection) -> list[Company]:
@@ -134,18 +136,29 @@ def find_page(conn: psycopg.Connection, http: httpx.Client,
 
 
 def run(conn: psycopg.Connection, http: httpx.Client, dry_run: bool = False,
-        delay: float = 1.0, say: Callable[[str], None] = print) -> list[Company]:
+        delay: float = 1.0, say: Callable[[str], None] = print,
+        skip: Iterable[str] = (), aggregators: Iterable[str] = ()) -> list[Company]:
+    """skip: names of companies to leave alone. aggregators: names of companies whose board,
+    if found, lists other companies' jobs too, so it is followed but isn't definitive. Names
+    match as company names do everywhere else (normalize_company: case, "GmbH", ...)."""
+    skip_keys = {normalize_company(name) for name in skip}
+    aggregator_keys = {normalize_company(name) for name in aggregators}
     companies = targets(conn)
+    skipped = [c.name for c in companies if normalize_company(c.name) in skip_keys]
+    companies = [c for c in companies if normalize_company(c.name) not in skip_keys]
+    if skipped:
+        say(f"Skipped: {', '.join(skipped)}.")
     say(f"{sum(len(c.jobs) for c in companies)} Himalayas jobs at {len(companies)} companies "
         "to check against the employer's own careers page.")
     for i, company in enumerate(companies):
         if i and delay:
             time.sleep(delay)
+        company.aggregator = normalize_company(company.name) in aggregator_keys
         postings = find_page(conn, http, company)
         if postings is not None and not dry_run:
             kind, slug, _ = company.found
             employer.follow_careers_page(conn, TrackedCompany(company.id, company.name, slug),
-                                         kind, postings)
+                                         kind, postings, aggregator=company.aggregator)
             score_jobs(conn, [j.id for j in company.jobs])
             for job in company.jobs:
                 job.after = conn.execute(
@@ -166,8 +179,9 @@ def report(company: Company, dry_run: bool, say: Callable[[str], None]) -> None:
             say(f"  {job.title} ({job.verdict} {job.score}): use Employer link on {job.himalayas_url}")
         return
     kind, slug, how = company.found
+    as_what = " as an aggregator" if company.aggregator else ""
     say(f"\n{company.name}: {kind} {slug}, found from {how}, {company.adverts} adverts"
-        f"{' (would follow it)' if dry_run else ', now followed'}.")
+        f"{f' (would follow it{as_what})' if dry_run else f', now followed{as_what}'}.")
     for job in company.jobs:
         listed = job.title in company.listed
         if job.after is None:
@@ -186,10 +200,16 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="look for careers pages and report, without changing anything")
     parser.add_argument("--delay", type=float, default=1.0, help="seconds between companies")
+    parser.add_argument("--skip", action="append", default=[], metavar="NAME",
+                        help="leave this company alone (repeat for more)")
+    parser.add_argument("--aggregator", action="append", default=[], metavar="NAME",
+                        help="this company's board lists other companies' jobs: follow it, but "
+                             "don't treat its adverts as definitive (repeat for more)")
     args = parser.parse_args()
     logging.basicConfig(level="WARNING")
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn, employer.client() as http:
-        run(conn, http, dry_run=args.dry_run, delay=args.delay)
+        run(conn, http, dry_run=args.dry_run, delay=args.delay, skip=args.skip,
+            aggregators=args.aggregator)
 
 
 if __name__ == "__main__":

@@ -118,3 +118,21 @@ def test_employer_link_route(conn, monkeypatch):  # noqa: F811
     assert ok.status_code == 303 and ok.headers["location"] == f"/?view=maybe#job-{staff}"
     assert bad.status_code == 400 and "careers" in bad.text
     assert score(conn, staff)[0] == "no"
+
+
+def test_aggregator_boards_are_not_definitive(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    himalayas(conn, "Staff Engineer", "Poland")
+    himalayas(conn, "Head of Data", "Poland")
+    conn.commit()
+    score_all(conn)
+    staff = job_id(conn, "Staff Engineer")
+    before = score(conn, staff)
+    # Ledgebrook's board, but marked as an aggregator's: it lists other companies' jobs too.
+    conn.execute("UPDATE companies SET aggregator = true")
+    conn.commit()
+    web.save_employer_link(staff, APPLY_LINK, client=comeet([]))
+    assert count(conn, "SELECT count(*) FROM postings WHERE job_id = %s" % staff) == 2  # merged
+    assert score(conn, staff) == before  # Himalayas' "Poland" isn't overridden
+    _, reasons = score(conn, job_id(conn, "Head of Data"))
+    assert not any("employer" in r for r in reasons)  # and nothing is flagged missing

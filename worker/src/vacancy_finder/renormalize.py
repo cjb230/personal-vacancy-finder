@@ -55,21 +55,22 @@ def _absorb_companies(conn: psycopg.Connection, keep: int, others: list[int]) ->
     """Move the others' jobs to `keep`, fill its blanks from them, then delete them."""
     cols = ", ".join(_COMPANY_FIELDS)
     kept = conn.execute(
-        f"SELECT {cols}, sectors, tracked, excluded FROM companies WHERE id = %s", (keep,)
+        f"SELECT {cols}, sectors, tracked, excluded, aggregator FROM companies WHERE id = %s", (keep,)
     ).fetchone()
-    values = dict(zip([*_COMPANY_FIELDS, "sectors", "tracked", "excluded"], kept))
+    values = dict(zip([*_COMPANY_FIELDS, "sectors", "tracked", "excluded", "aggregator"], kept))
     # Tracked rows first, so a seeded feed wins over one learnt from a posting.
     for row in conn.execute(
-        f"SELECT {cols}, sectors, tracked, excluded FROM companies WHERE id = ANY(%s) "
+        f"SELECT {cols}, sectors, tracked, excluded, aggregator FROM companies WHERE id = ANY(%s) "
         "ORDER BY tracked DESC, id",
         (others,),
     ).fetchall():
-        other = dict(zip([*_COMPANY_FIELDS, "sectors", "tracked", "excluded"], row))
+        other = dict(zip([*_COMPANY_FIELDS, "sectors", "tracked", "excluded", "aggregator"], row))
         for field in _COMPANY_FIELDS:
             values[field] = values[field] or other[field]
         values["sectors"] = list(dict.fromkeys(values["sectors"] + other["sectors"]))
         values["tracked"] |= other["tracked"]
         values["excluded"] |= other["excluded"]
+        values["aggregator"] |= other["aggregator"]
     if not (values["ats_kind"] and values["ats_slug"]):
         values["ats_kind"] = values["ats_slug"] = None
 

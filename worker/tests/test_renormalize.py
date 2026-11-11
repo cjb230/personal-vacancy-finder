@@ -63,6 +63,17 @@ def test_unknown_company_and_placeholder_titles_stay_separate(conn):  # noqa: F8
     assert count(conn, "SELECT count(*) FROM jobs") == 3
 
 
+def test_aggregator_flag_survives_a_company_merge(conn):  # noqa: F811
+    source = ensure_source(conn, "test", "Test", "board")
+    upsert_posting(conn, source, posting("1", "Huzzle"))
+    conn.execute("UPDATE companies SET normalized_name = 'old', aggregator = true")
+    upsert_posting(conn, source, posting("2", "Huzzle Ltd", "Director"))
+    conn.commit()
+    assert count(conn, "SELECT count(*) FROM companies") == 2
+    renormalize(conn)
+    assert conn.execute("SELECT name, aggregator FROM companies").fetchall() == [("Huzzle", True)]
+
+
 def test_pasted_description_follows_a_merged_job(conn):  # noqa: F811
     source = ensure_source(conn, "test", "Test", "board")
     upsert_posting(conn, source, posting("1", "Orbit"))
