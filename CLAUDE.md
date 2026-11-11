@@ -28,6 +28,7 @@ Live-check tools fetch from real sites without touching the database (run them f
 - `python -m vacancy_finder.check_justjoinit N`: the Just Join IT parser.
 - `python -m vacancy_finder.check_companies [--kind page] [NAME ...]`: seeded careers feeds.
 - `python -m vacancy_finder.probe "Company" ...` or `--file seeds/candidates.txt`: finds a company's ATS slug and prints rows for `seeds/companies.csv`.
+- `python -m vacancy_finder.find_employer_adverts [--dry-run]` (needs the database, so run it in the worker container): finds and follows the employer's careers page for Interested/Maybe Himalayas jobs and rescores them. It shares `employer.py` with the Employer link button.
 
 ## Architecture
 

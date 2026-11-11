@@ -39,11 +39,10 @@ import httpx
 import psycopg
 
 from .capture import DESCRIPTION_MAX, bookmarklet, save_capture, save_job_description
-from .collectors import COLLECTORS
-from .collectors.ats import USER_AGENT, TrackedCompany
+from . import employer
+from .collectors.ats import TrackedCompany
 from .discover import find_boards
 from .matching import score_jobs
-from .store import ensure_source, upsert_posting
 
 log = logging.getLogger(__name__)
 
@@ -600,7 +599,7 @@ class EmployerLinkError(Exception):
 
 
 def employer_client() -> httpx.Client:
-    return httpx.Client(timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True)
+    return employer.client()
 
 
 def save_employer_link(job_id: int, url: str,
@@ -617,33 +616,26 @@ def save_employer_link(job_id: int, url: str,
                          "Lever, Ashby, Workable, Personio, Recruitee, Teamtailor, Traffit or "
                          "Comeet).")
     kind, slug = boards.pop()
-    collector = next(c for c in COLLECTORS if c.source_key == kind)
     with connect() as conn:
         row = conn.execute("SELECT c.id, c.name FROM jobs j JOIN companies c ON c.id = j.company_id"
                            " WHERE j.id = %s", (job_id,)).fetchone()
         if row is None:
             raise ValueError("This job has no company to link a careers page to.")
         company = TrackedCompany(row[0], row[1], slug)
-        conn.execute("UPDATE companies SET ats_kind = %s, ats_slug = %s, tracked = true"
-                     " WHERE id = %s", (kind, slug, company.id))
-        conn.commit()
         own_client = client is None
         client = client or employer_client()
         try:
-            postings = list(collector.parse(collector.fetch_company(client, company), company))
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+            postings = employer.read_careers_page(client, kind, company)
+        except employer.READ_ERRORS as e:
+            employer.follow_careers_page(conn, company, kind, [])  # the next run retries
             raise EmployerLinkError(
-                f"{company.name} is now followed on {collector.source_name}, but its careers page "
-                f"couldn't be read just now ({e}). It will be tried again on the next "
-                "careers-page run.") from e
+                f"{company.name} is now followed on {employer.collector_for(kind).source_name}, "
+                f"but its careers page couldn't be read just now ({e}). It will be tried again "
+                "on the next careers-page run.") from e
         finally:
             if own_client:
                 client.close()
-        source_id = ensure_source(conn, collector.source_key, collector.source_name,
-                                  collector.source_kind)
-        for posting in postings:
-            upsert_posting(conn, source_id, posting)
-        conn.commit()
+        employer.follow_careers_page(conn, company, kind, postings)
         score_jobs(conn, [job_id])
     log.info("Employer link for job %d: %s on %s (%s), %d adverts", job_id, company.name, kind,
              slug, len(postings))
