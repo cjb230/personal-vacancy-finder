@@ -50,6 +50,12 @@ For each company it looks for the careers page in links in the adverts already c
 
 The rules live in `worker/src/vacancy_finder/matching.py`, written to be read and tuned: role level, Python and SQL, location and work mode, sector, contract and pay add or take away points, and a few things rule a job out entirely (an advert not in English, a requirement to speak Polish or German, a non-engineering role, on-site outside Warsaw, remote limited to other continents, tobacco or gambling).
 
+A few bonuses add up on top: +10 for a job found on Hacker News, +5 for one found in a LinkedIn alert, and +5 at a well-known employer. The well-known employers are listed in `worker/seeds/big_names.csv` (columns `name`, `aliases` separated by `;`), starting with Meta, Apple, Amazon, Netflix and Google. The seeds folder is mounted into the worker, so edits apply at the next scoring without a rebuild. A company matches when its normalised name equals a listed name or alias: case, legal suffixes and country words don't matter ("Google Poland Sp. z o.o." is Google), but the match is exact, so "Apple Leisure Group" isn't Apple. To see which companies in the database match, and which start like a listed name without matching (candidates for an alias):
+
+```sh
+docker compose exec worker python -m vacancy_finder.big_names --check
+```
+
 ## How data is stored
 
 - A **posting** is one advert on one source, unique by `(source, external_id)`.

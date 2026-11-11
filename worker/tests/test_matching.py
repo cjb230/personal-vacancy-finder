@@ -361,3 +361,16 @@ def test_job_missing_from_the_employers_page_keeps_its_score():
     # A company with no employer adverts collected says nothing either way.
     [alone] = merge_employer_adverts({1: board()}, {})
     assert not alone.employer_missing and alone.employer_advert is None
+
+
+def test_linkedin_and_big_name_bonuses_add_up():
+    plain = score_job(job("Engineering Manager"))
+    linkedin = score_job(job("Engineering Manager", sources=("email_alerts", "linkedin")))
+    big = job("Engineering Manager", company="Google Poland")
+    big.big_name = "Google"
+    both = job("Engineering Manager", sources=("linkedin",))
+    both.big_name = "Google"
+    assert linkedin.score == plain.score + 5 and "found on LinkedIn (+5)" in linkedin.reasons
+    assert score_job(big).score == plain.score + 5
+    assert "well-known company: Google (+5)" in score_job(big).reasons
+    assert score_job(both).score == plain.score + 10

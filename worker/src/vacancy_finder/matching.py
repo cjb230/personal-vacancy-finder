@@ -27,6 +27,7 @@ from typing import Any
 
 import psycopg
 
+from . import big_names
 from .normalize import normalize_company, normalize_title
 
 log = logging.getLogger(__name__)
@@ -168,6 +169,11 @@ US_CITIZENS = _rx(
 )
 HN_SOURCE = "hn-whoishiring"
 HN_BONUS = 10
+# Found on LinkedIn (an alert from it), and at a well-known employer (big_names.csv); they add
+# up (James, 2026-11-11).
+LINKEDIN_SOURCE = "linkedin"  # added to JobFacts.sources for a LinkedIn alert posting
+LINKEDIN_BONUS = 5
+BIG_NAME_BONUS = 5
 # On Hacker News a "Staff Engineer" title is software work (James, 2026-11-03).
 HN_STAFF_ENGINEER = _rx(r"\bstaff engineers?\b")
 
@@ -288,6 +294,7 @@ class JobFacts:
     employer_advert: str | None = None
     # The company's careers page is collected but doesn't list this job.
     employer_missing: bool = False
+    big_name: str | None = None  # the big_names.csv entry the company matches, if any
 
 
 @dataclass
@@ -443,6 +450,12 @@ def score_job(job: JobFacts) -> Score:
     if HN_SOURCE in job.sources:
         points += HN_BONUS
         reasons.append(f"found on Hacker News (+{HN_BONUS})")
+    if LINKEDIN_SOURCE in job.sources:
+        points += LINKEDIN_BONUS
+        reasons.append(f"found on LinkedIn (+{LINKEDIN_BONUS})")
+    if job.big_name:
+        points += BIG_NAME_BONUS
+        reasons.append(f"well-known company: {job.big_name} (+{BIG_NAME_BONUS})")
 
     # Pay.
     if job.take_home_max is not None:
@@ -547,6 +560,8 @@ def load_facts(conn: psycopg.Connection, job_ids: list[int] | None = None) -> li
             job.descriptions.append(description)
         job.languages.add(language)
         job.sources.add(source)
+        if isinstance(raw, dict) and raw.get("platform") == "linkedin":
+            job.sources.add(LINKEDIN_SOURCE)  # an email alert from LinkedIn
         job.required_languages |= required_languages(source, raw)
         if contract:
             job.contract_types.add(contract.lower())
@@ -556,6 +571,10 @@ def load_facts(conn: psycopg.Connection, job_ids: list[int] | None = None) -> li
             if job.take_home_max is None or pay > job.take_home_max:
                 job.take_home_max = pay
     jobs = merge_employer_adverts(boards, employer)
+    names = big_names.load()  # re-read each time, so edits to the file apply at once
+    for job in jobs:
+        if job.company:
+            job.big_name = names.get(normalize_company(job.company))
     by_id = {job.job_id: job for job in jobs}
     # Text James pasted on the results page for a job that had none (web.py).
     for job_id, description, language in conn.execute(
