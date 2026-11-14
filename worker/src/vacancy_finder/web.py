@@ -9,7 +9,8 @@ when each source was last checked, and whether that check failed. Marking a job 
 for when (default now) and the folder holding the application, both shown on the job. Matches,
 Interested, Applied and Missed jobs show when a source last confirmed their advert, or that it
 has gone; interested jobs whose adverts go move to Missed. /capture installs a bookmarklet that
-sends the description of a LinkedIn job open in James's browser (see capture.py). Interested jobs
+sends the description of a LinkedIn job open in James's browser (see capture.py). /add adds a
+vacancy by its URL, reading what it can from the page and taking the rest pasted (add_job.py). Interested jobs
 get a "Tailor CV" button that starts a CV tailoring run on the Tailor API (tailor-api.md in the
 cv-creator repo) and keeps the link to the run's status page; marking a job interested starts
 that run automatically if the job has none yet. Open jobs with no advert text get a
@@ -39,7 +40,7 @@ import httpx
 import psycopg
 
 from .capture import DESCRIPTION_MAX, bookmarklet, save_capture, save_job_description
-from . import employer
+from . import add_job, employer
 from .collectors.ats import TrackedCompany
 from .discover import find_boards
 from .matching import score_jobs
@@ -176,7 +177,7 @@ SELECT so.name, r.started_at AT TIME ZONE %(tz)s, r.status, r.error
 FROM sources so
 LEFT JOIN LATERAL (SELECT started_at, status, error FROM collection_runs
                    WHERE source_id = so.id ORDER BY started_at DESC LIMIT 1) r ON true
-WHERE so.enabled
+WHERE so.enabled AND so.kind <> 'manual'  -- jobs added by hand have no checks to show
 ORDER BY so.name
 """
 
@@ -208,9 +209,11 @@ nav a.on { background:var(--accent); color:#fff; }
 nav.chips { font-size:14px; color:var(--muted); } nav.chips span { margin-right:8px; }
 nav.chips a { font-size:13px; padding:2px 10px; }
 main.capture { max-width:720px; } main.capture label { display:block; margin:8px 0; }
-main.capture input, main.capture textarea { display:block; width:100%; box-sizing:border-box;
-  font:inherit; padding:4px 8px; border:1px solid var(--line); border-radius:6px;
-  background:var(--bg); color:var(--fg); }
+main.capture input, main.capture textarea, main.capture select { display:block; width:100%;
+  box-sizing:border-box; font:inherit; padding:4px 8px; border:1px solid var(--line);
+  border-radius:6px; background:var(--bg); color:var(--fg); }
+main.capture input[type=checkbox] { display:inline; width:auto; margin-right:6px; }
+main.capture .problem { padding:8px 12px; border-left:3px solid var(--warn); background:var(--chip); }
 a.bookmarklet { display:inline-block; padding:2px 10px; border:1px solid var(--accent);
   border-radius:12px; }
 form.search { display:inline; } form.search input { padding:4px 8px; border:1px solid var(--line);
@@ -415,6 +418,7 @@ render_tailor(job_id, tailorings.get(job_id), back) if decision == "interested" 
 <header>{render_checked(checked, now)}<h1>Vacancy finder</h1><nav>{tabs}
 <form class="search" method="get"><input type="hidden" name="view" value="{esc(view)}">
 {hidden(keep)}<input name="q" value="{esc(q)}" placeholder="Search title or company"></form>
+<a href="/add" title="Add a vacancy by its URL">Add job</a>
 <a href="/capture" title="Send LinkedIn job descriptions from your browser">Capture</a></nav>
 {render_filters(view, q, seen, since, min_score, sort, closes, hide)}{render_seen_chips(view, q, keep, seen, since)}
 {render_role_toggles(view, q, keep, hidden_levels)}</header>
@@ -959,6 +963,131 @@ def capture(form: dict[str, list[str]]) -> tuple[HTTPStatus, str]:
 {what}<p>You can close this tab. <a href="/capture">Latest captures</a></p>""")
 
 
+def add_client() -> httpx.Client:
+    return employer.client()
+
+
+def render_add(message: str = "", url: str = "") -> str:
+    """The Add job page: a box for the advert's URL, and the jobs added by hand lately."""
+    with connect() as conn:
+        recent = conn.execute(
+            """
+            SELECT p.first_seen_at AT TIME ZONE %s, p.url, p.title, p.company_name, s.verdict,
+                   s.score
+            FROM postings p JOIN sources so ON so.id = p.source_id
+            LEFT JOIN job_scores s ON s.job_id = p.job_id
+            WHERE so.key = %s ORDER BY p.first_seen_at DESC LIMIT 20
+            """,
+            (DISPLAY_TZ, add_job.SOURCE_KEY),
+        ).fetchall()
+    rows = "".join(
+        f'<li>{at:%d %b %H:%M} <a href="{esc(link)}" target="_blank" rel="noopener">{esc(title)}</a>'
+        f' · {esc(company)}{f" · {esc(verdict)} ({score})" if verdict else ""}</li>'
+        for at, link, title, company, verdict, score in recent
+    ) or "<li>None yet.</li>"
+    return page("Add a job", f"""
+{message}
+<h2>Add a job by its URL</h2>
+<p>Paste the advert's address. The finder reads what it can from the page (it never fetches
+LinkedIn or No Fluff Jobs, or pages a site's robots.txt bars), then shows the details for you
+to check, with a box for the description when the page couldn't be read.</p>
+<form method="post" action="/add/read">
+  <label>Advert URL <input type="url" name="url" required value="{esc(url)}"
+    placeholder="https://jobs.lever.co/... or https://www.linkedin.com/jobs/view/..."></label>
+  <button>Read the advert</button></form>
+<h3>Added lately</h3><ul>{rows}</ul>""")
+
+
+def render_add_form(draft: add_job.Draft) -> str:
+    """The details read from the advert, for James to check or complete before saving."""
+    modes = "".join(f'<option value="{m}"{" selected" if m == draft.work_mode else ""}>'
+                    f'{"Not stated" if m == "unknown" else m.capitalize()}</option>'
+                    for m in add_job.WORK_MODES)
+    problem = f'<p class="problem">{esc(draft.problem)}</p>' if draft.problem else ""
+    read_from = (f"<p>Read from {esc(draft.read_from)}. Check the details and save.</p>"
+                 if draft.read_from and not draft.problem else "")
+    follow = ""
+    if draft.ats:
+        source_name = employer.collector_for(draft.ats[0]).source_name
+        follow = (f'<label><input type="checkbox" name="follow" value="1" checked>Also follow this '
+                  f"company's careers page on {esc(source_name)}, so its other adverts are collected "
+                  "too</label>"
+                  f'<input type="hidden" name="ats_kind" value="{esc(draft.ats[0])}">'
+                  f'<input type="hidden" name="ats_slug" value="{esc(draft.ats[1])}">')
+    return page("Add a job", f"""
+<h2>Add a job</h2>
+<p><a href="{esc(draft.url)}" target="_blank" rel="noopener">{esc(draft.url)}</a></p>
+{problem}{read_from}
+<form method="post" action="/add">
+  <input type="hidden" name="url" value="{esc(draft.url)}">
+  <input type="hidden" name="external_id" value="{esc(draft.external_id)}">
+  <input type="hidden" name="read_from" value="{esc(draft.read_from)}">
+  <input type="hidden" name="extra" value="{esc(add_job.extra_to_json(draft.extra))}">
+  <label>Title <input name="title" required value="{esc(draft.title)}"></label>
+  <label>Company <input name="company" required value="{esc(draft.company)}"></label>
+  <label>Location <input name="location" value="{esc(draft.location)}"
+    placeholder="e.g. Warsaw, Poland or Remote, Europe"></label>
+  <label>Work mode <select name="work_mode">{modes}</select></label>
+  <label>Description <textarea name="description" rows="16" required
+    placeholder="Paste the advert text here">{esc(draft.description)}</textarea></label>
+  {follow}
+  <button>Save and score</button> <a href="/add">Cancel</a></form>""")
+
+
+def read_added(form: dict[str, list[str]]) -> tuple[HTTPStatus, str]:
+    url = form.get("url", [""])[0].strip()
+    try:
+        with connect() as conn, add_client() as client:
+            draft = add_job.read(url, conn, client)
+    except ValueError as exc:
+        return HTTPStatus.BAD_REQUEST, render_add(f'<p class="problem">{esc(exc)}</p>', url)
+    log.info("Add job: read %s from %s%s", draft.url, draft.read_from or "nowhere",
+             f" ({draft.problem})" if draft.problem else "")
+    return HTTPStatus.OK, render_add_form(draft)
+
+
+def draft_from_form(form: dict[str, list[str]]) -> add_job.Draft:
+    field = lambda name: form.get(name, [""])[0]  # noqa: E731
+    url = add_job.check_url(field("url"))
+    kind, slug = field("ats_kind"), field("ats_slug").strip()
+    ats = (kind, slug) if slug and any(c.source_key == kind for c in employer.COLLECTORS) else None
+    return add_job.Draft(
+        url=url, external_id=field("external_id").strip()[:500] or add_job.canonical_url(url),
+        title=field("title"), company=field("company"), location=field("location"),
+        work_mode=field("work_mode"), description=field("description"),
+        extra=add_job.extra_from_json(field("extra")), ats=ats, read_from=field("read_from")[:100])
+
+
+def save_added(form: dict[str, list[str]]) -> tuple[HTTPStatus, str]:
+    """Save a job from the Add job form and rescore its company's jobs. Returns the result page."""
+    try:
+        draft = draft_from_form(form)
+    except ValueError as exc:
+        return HTTPStatus.BAD_REQUEST, render_add(f'<p class="problem">{esc(exc)}</p>')
+    try:
+        with connect() as conn:
+            saved = add_job.save(conn, draft, follow=form.get("follow", [""])[0] == "1")
+            score_jobs(conn, [saved.job_id])
+            verdict, score, decision = conn.execute(
+                "SELECT s.verdict, s.score, r.decision FROM jobs j"
+                " LEFT JOIN job_scores s ON s.job_id = j.id LEFT JOIN job_reviews r ON r.job_id = j.id"
+                " WHERE j.id = %s", (saved.job_id,)).fetchone()
+    except ValueError as exc:
+        log.info("Add job refused: %s", exc)
+        draft.problem = f"Not saved: {exc}"
+        return HTTPStatus.BAD_REQUEST, render_add_form(draft)
+    scored = f"{verdict} ({score})" if verdict else "unscored"
+    log.info("Added job %d by hand (%s): %s, now %s", saved.job_id, draft.url,
+             "joined an existing job" if saved.joined else "new job", scored)
+    where = "It joined a job already found elsewhere." if saved.joined else "It is a new job."
+    view = decision if decision in VIEWS else verdict if verdict in VIEWS else "match"
+    link = f'/?{urlencode({"view": view, "q": saved.title[:100]})}'
+    return HTTPStatus.OK, page("Job added", f"""<h2>Added {esc(saved.title)}</h2>
+<p>{where} Scored {esc(scored)}. <a href="{esc(link)}">Show it in the list</a></p>
+{f"<p>{esc(saved.followed)}</p>" if saved.followed else ""}
+<p><a href="/add">Add another</a></p>""")
+
+
 class Handler(BaseHTTPRequestHandler):
     def origin(self) -> str:
         host = self.headers.get("Host") or ""
@@ -968,6 +1097,9 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path == "/capture":
             self._send(HTTPStatus.OK, render_capture(self.origin()))
+            return
+        if url.path == "/add":
+            self._send(HTTPStatus.OK, render_add())
             return
         if url.path != "/":
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -988,6 +1120,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/capture":
             length = min(int(self.headers.get("Content-Length") or 0), 400_000)
             self._send(*capture(parse_qs(self.rfile.read(length).decode(errors="replace"))))
+            return
+        if path in ("/add", "/add/read"):
+            length = min(int(self.headers.get("Content-Length") or 0), DESCRIPTION_MAX * 8)
+            form = parse_qs(self.rfile.read(length).decode(errors="replace"))
+            self._send(*(read_added(form) if path == "/add/read" else save_added(form)))
             return
         if path not in ("/review", "/feedback", "/feedback/delete", "/tailor", "/describe",
                         "/employer-link"):
