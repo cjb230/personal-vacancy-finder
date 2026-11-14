@@ -49,10 +49,11 @@ log = logging.getLogger(__name__)
 
 PAGE_SIZE = 100
 DECISIONS = {"interested": "Interested", "not_interested": "Not interested", "applied": "Applied",
-             "rejected": "Rejected"}
+             "rejected": "Rejected", "gone": "Gone"}
 # Decisions whose button shows only on jobs with one of these decisions: an application can
-# only be rejected once it has been made.
-DECISION_NEEDS = {"rejected": {"applied", "rejected"}}
+# only be rejected once it has been made, and "Gone" (the advert vanished before James judged
+# the job) is only for jobs he hasn't judged, so it never stands in for a real "no".
+DECISION_NEEDS = {"rejected": {"applied", "rejected"}, "gone": {None, "gone"}}
 # Feedback kinds, as (label, takes a note). Notes are kept to improve the filters later;
 # score_higher/score_lower only record which way the weights should move for this job.
 FEEDBACK = {
@@ -69,7 +70,7 @@ DIR_MAX = 1000
 # A job is listed while it has an open advert, and, if it was ever seen on a source that lists
 # every current advert (not an email alert), while one of those is still open.
 LISTED = "j.status = 'open' AND coalesce(cf.still_listed, true)"
-# Interested, Applied and Missed jobs stay on their tabs after their adverts go: Interested
+# Interested, Applied, Missed and Gone jobs stay on their tabs after their adverts go: Interested
 # ones whose adverts are confirmed gone move to Missed (store.confirm_tracked_jobs).
 VIEWS = {
     "match": ("Matches", f"{LISTED} AND s.verdict = 'match' AND r.decision IS NULL"),
@@ -78,11 +79,12 @@ VIEWS = {
     "applied": ("Applied", "r.decision = 'applied'"),
     "missed": ("Missed", "r.decision = 'missed'"),
     "rejected": ("Rejected", "r.decision = 'rejected'"),
+    "gone": ("Gone", "r.decision = 'gone'"),
     "not_interested": ("Not interested", f"{LISTED} AND r.decision = 'not_interested'"),
     "no": ("Filtered out", f"{LISTED} AND s.verdict = 'no' AND r.decision IS NULL"),
 }
 # Tabs whose jobs show when they were last confirmed on a source, or that their advert has gone.
-CONFIRMED_VIEWS = {"match", "interested", "applied", "missed"}
+CONFIRMED_VIEWS = {"match", "interested", "applied", "missed", "gone"}
 
 # First-seen filter presets, in hours.
 SEEN_WITHIN = {"": "Any time", "6": "Last 6 hours", "24": "Last 24 hours", "72": "Last 3 days",

@@ -294,6 +294,38 @@ def test_tracked_jobs_show_confirmation_and_missed_tab(conn, monkeypatch):  # no
     assert "Director of Engineering" in applied and "advert gone" in applied
 
 
+def test_gone_button_only_on_unjudged_jobs_and_has_its_own_tab(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    board = ensure_source(conn, "test", "Test board", "board")
+    ad = dict(company_name="Orbit", location_text="Remote, Europe", work_mode="remote",
+              description="Python and PostgreSQL for satellite imagery. You will lead the team.")
+    for n, title in (("1", "Engineering Manager"), ("2", "Director of Engineering")):
+        upsert_posting(conn, board, RawPosting(external_id=n, url=f"https://x.example/{n}",
+                                               title=title, **ad))
+    conn.commit()
+    score_all(conn)
+    ids = dict(conn.execute("SELECT title, id FROM jobs").fetchall())
+    gone_button = 'name="decision" value="gone"'
+    unjudged = web.render("match", "", 0) + web.render("maybe", "", 0)
+    assert unjudged.count(gone_button) == 2
+
+    web.save_review(ids["Engineering Manager"], "gone")
+    web.save_review(ids["Director of Engineering"], "interested")
+    page = web.render("gone", "", 0)
+    assert "Gone (1)" in page and "Not interested (0)" in page
+    assert "Matches (0)" in page and "Maybes (0)" in page
+    main = page.split("<main>")[1]
+    assert "Engineering Manager" in main and "Director of Engineering" not in main
+    assert re.search(r"confirmed \d\d \w{3} \d\d:\d\d", main)
+    # A job James has judged gets no Gone button: it would hide a real decision.
+    assert gone_button not in web.render("interested", "", 0).split("<main>")[1]
+    # Gone jobs are not re-confirmed, so an advert still listed doesn't move them.
+    confirm_tracked_jobs(conn)
+    conn.commit()
+    assert conn.execute("SELECT decision FROM job_reviews WHERE job_id = %s",
+                        (ids["Engineering Manager"],)).fetchone()[0] == "gone"
+
+
 def test_role_toggles_hide_staff_manager_and_director(conn, monkeypatch):  # noqa: F811
     monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
     source = ensure_source(conn, "test", "Test board", "board")
