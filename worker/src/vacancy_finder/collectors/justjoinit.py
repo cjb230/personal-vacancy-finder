@@ -29,7 +29,7 @@ import psycopg
 
 from ..models import RawPosting
 from ..normalize import detect_language
-from .ats import USER_AGENT, clean, from_iso, html_to_text
+from .ats import polite_client, clean, from_iso, html_to_text
 
 log = logging.getLogger(__name__)
 
@@ -232,9 +232,7 @@ class JustJoinItCollector:
         return entries
 
     def collect(self, conn: psycopg.Connection) -> Iterator[RawPosting]:
-        client = self._client or httpx.Client(
-            timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True
-        )
+        client = self._client or polite_client()
         try:
             entries = [e for e in self.sitemap_entries(client) if self.wanted(e)]
             known = known_lastmods(conn, self.source_key)

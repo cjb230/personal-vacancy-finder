@@ -24,7 +24,7 @@ import psycopg
 
 from ..models import RawPosting
 from ..normalize import detect_language
-from .ats import USER_AGENT, clean, html_to_text
+from .ats import polite_client, clean, html_to_text
 from .justjoinit import SitemapEntry, known_lastmods, touch_postings
 
 log = logging.getLogger(__name__)
@@ -123,9 +123,7 @@ class SpaceCareersCollector:
         return parse_sitemap(response.content)
 
     def collect(self, conn: psycopg.Connection) -> Iterator[RawPosting]:
-        client = self._client or httpx.Client(
-            timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True
-        )
+        client = self._client or polite_client()
         try:
             entries = self.sitemap_entries(client)
             known = known_lastmods(conn, self.source_key)

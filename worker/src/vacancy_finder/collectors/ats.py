@@ -17,10 +17,10 @@ import httpx
 import psycopg
 
 from ..models import RawPosting
+from .http_client import USER_AGENT, polite_client  # noqa: F401 (USER_AGENT re-exported)
 
 log = logging.getLogger(__name__)
 
-USER_AGENT = "personal-vacancy-finder/0.1 (personal job search)"
 
 
 @dataclass(frozen=True)
@@ -108,9 +108,7 @@ class AtsCollector:
     def collect(self, conn: psycopg.Connection) -> Iterator[RawPosting]:
         self._incomplete = set()
         companies = tracked_companies(conn, self.source_key)
-        client = self._client or httpx.Client(
-            timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True
-        )
+        client = self._client or polite_client()
         try:
             for company in companies:
                 try:

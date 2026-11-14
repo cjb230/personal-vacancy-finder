@@ -28,7 +28,7 @@ import psycopg
 
 from ..models import RawPosting
 from ..normalize import PLACEHOLDER_TITLE
-from .ats import USER_AGENT, clean, from_iso, guess_work_mode, html_to_text
+from .ats import polite_client, clean, from_iso, guess_work_mode, html_to_text
 from .justjoinit import touch_postings
 
 log = logging.getLogger(__name__)
@@ -85,9 +85,7 @@ class FeedCollector:
         return response
 
     def collect(self, conn: psycopg.Connection) -> Iterator[RawPosting]:
-        client = self._client or httpx.Client(
-            timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True
-        )
+        client = self._client or polite_client()
         self._requests = 0
         self._gone = set()
         try:
@@ -119,6 +117,9 @@ class HimalayasCollector(FeedCollector):
                 "daily": "day"}
 
     def __init__(self, *args, queries=None, max_pages=None, max_checks=None, **kwargs) -> None:
+        # Himalayas answered 429 after about 26 requests in a minute at 2s apart, so its
+        # requests are spaced further apart by default (at most 20 a minute).
+        kwargs.setdefault("delay_seconds", float(os.environ.get("HIMALAYAS_DELAY_SECONDS", "3")))
         super().__init__(*args, **kwargs)
         env = os.environ.get("HIMALAYAS_QUERIES")
         self.queries = queries or (

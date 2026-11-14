@@ -124,6 +124,8 @@ DATABASE_URL=postgresql://vacancies:...@127.0.0.1:5432/vacancies python -m vacan
 
 If one company's feed fails, its postings are left open rather than closed, and the run carries on with the rest.
 
+**Rate limits.** When a site answers 429 Too Many Requests, every collector and checker waits and tries the request again instead of failing: for the site's Retry-After time if it gives one, otherwise 30 seconds, then 60, 120 and 240, never more than 5 minutes at a time. After four retries the request fails as before. The worker log shows each wait ("rate limited (429), waiting …").
+
 ### Just Join IT
 
 justjoin.it's robots.txt disallows its API, so the collector reads only what the site offers crawlers: the sitemap of active adverts and each advert's page. To stay polite it opens only adverts whose URL contains a role keyword as a whole word (`JUSTJOINIT_KEYWORDS`), only re-opens an advert when its sitemap date changes, waits `JUSTJOINIT_DELAY_SECONDS` between pages, and opens at most `JUSTJOINIT_MAX_PAGES` per run. The first runs work through the backlog; after that each run fetches only new or changed adverts.
@@ -142,7 +144,7 @@ space-careers.com has no feed or API, but its sitemap lists every live advert (a
 
 Himalayas (searched with role queries, limited to jobs open to people in Poland), Remote OK, We Work Remotely (programming and DevOps feeds), Arbeitnow (remote jobs and jobs in Poland only) and the Hacker News "Who is hiring?" threads (this month and last, re-read every run so new comments are picked up). These feeds show only recent jobs, so a posting is closed once it has been missing for a couple of weeks (45 days for Hacker News) rather than on its first absence. A posting missing from a run whose expiry date (given by the feed) has passed is closed at once. Himalayas doesn't wait either: a Himalayas posting missing from the role searches is looked up by searching for its company, and closed on that run if the company's results no longer include it (an expired advert's page redirects to the jobs list, but scripts only get a Cloudflare challenge there, so the page itself can't be checked). Companies with Interested or Applied jobs are looked up first, up to `HIMALAYAS_MAX_CHECKS` (40) companies a run; the rest wait for a later run, or fall back to the three-week rule. Remotive is left out: its robots.txt disallows the API.
 
-Settings: `HIMALAYAS_QUERIES` (comma-separated), `HIMALAYAS_MAX_PAGES` (20 jobs per page, per query), `ARBEITNOW_MAX_PAGES`.
+Settings: `HIMALAYAS_QUERIES` (comma-separated), `HIMALAYAS_MAX_PAGES` (20 jobs per page, per query), `HIMALAYAS_DELAY_SECONDS` (3; Himalayas answers 429 after about 26 requests a minute), `ARBEITNOW_MAX_PAGES`.
 
 To check them against the live sites without touching the database: `python -m vacancy_finder.check_feeds` (or name sources, e.g. `check_feeds himalayas`).
 

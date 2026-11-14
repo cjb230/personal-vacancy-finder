@@ -8,10 +8,9 @@ import argparse
 import csv
 import time
 
-import httpx
 
 from .collectors import COLLECTORS
-from .collectors.ats import USER_AGENT, AtsCollector, TrackedCompany
+from .collectors.ats import polite_client, AtsCollector, TrackedCompany
 
 
 def main() -> None:
@@ -28,7 +27,7 @@ def main() -> None:
     rows = [r for r in rows if (not args.names or r["name"] in args.names)
             and (not args.kind or r["ats_kind"] in args.kind)]
 
-    with httpx.Client(timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
+    with polite_client() as client:
         for i, row in enumerate(rows):
             if i:
                 time.sleep(args.delay)

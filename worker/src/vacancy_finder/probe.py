@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
-from .collectors.ats import ATS_COLLECTORS, USER_AGENT, TrackedCompany
+from .collectors.ats import ATS_COLLECTORS, polite_client, TrackedCompany
 from .collectors.more_ats import (PersonioCollector, RecruiteeCollector, TeamtailorCollector,
                                   TraffitCollector)
 
@@ -110,7 +110,7 @@ def main() -> None:
         return name, probe(client, name, [s for s in extra.split(",") if s])
 
     out = csv.writer(sys.stdout)
-    with httpx.Client(timeout=20, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client, \
+    with polite_client(timeout=20) as client, \
             ThreadPoolExecutor(args.workers) as pool:
         for name, hits in pool.map(probe_one, enumerate(names)):
             if not hits:

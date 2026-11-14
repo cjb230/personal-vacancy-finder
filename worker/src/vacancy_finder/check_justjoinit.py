@@ -9,15 +9,14 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
-import httpx
 
-from .collectors.ats import USER_AGENT
+from .collectors.ats import polite_client
 from .collectors.justjoinit import JustJoinItCollector, parse_offer_page
 
 
 def sample(n: int) -> None:
     collector = JustJoinItCollector()
-    with httpx.Client(timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
+    with polite_client() as client:
         entries = [e for e in collector.sitemap_entries(client) if collector.wanted(e)]
         print(f"{len(entries)} matching adverts in the sitemap")
         for i, entry in enumerate(entries[:n]):

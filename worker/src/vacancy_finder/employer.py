@@ -9,7 +9,7 @@ import httpx
 import psycopg
 
 from .collectors import COLLECTORS, Collector
-from .collectors.ats import USER_AGENT, TrackedCompany
+from .collectors.ats import polite_client, TrackedCompany
 from .models import RawPosting
 from .normalize import normalize_title
 from .store import ensure_source, upsert_posting
@@ -19,7 +19,7 @@ READ_ERRORS = (httpx.HTTPError, ValueError, KeyError, TypeError)
 
 
 def client() -> httpx.Client:
-    return httpx.Client(timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True)
+    return polite_client()
 
 
 def collector_for(kind: str) -> Collector:
