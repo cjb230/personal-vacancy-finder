@@ -49,7 +49,7 @@ The worker is a single process (`vacancy_finder/__main__.py`). On start it appli
 
 ## Conventions
 
-- Be polite to sources: respect robots.txt and use `USER_AGENT` from `collectors/ats.py`. Sources whose robots.txt or terms forbid automated access (No Fluff Jobs, Remotive, LinkedIn and similar) are covered through email alerts or left out, never scraped. Check before adding a source.
+- Be polite to sources: respect robots.txt and make requests with `polite_client()` from `collectors/http_client.py` (it sets `USER_AGENT` and waits out 429s). Sources whose robots.txt or terms forbid automated access (No Fluff Jobs, Remotive, LinkedIn and similar) are covered through email alerts or left out, never scraped. Check before adding a source.
 - Keep Polish and German adverts in the database, marked with `language`, so they aren't fetched again. They are excluded at scoring, not at collection.
 - `worker/seeds/` is mounted read-only into the container, so seed edits apply on the next cycle without a rebuild. Code changes need `docker compose up -d --build`.
 - Docs, docstrings and commit messages use plain English, and commit subjects are short imperative sentences with no type prefixes. Update `README.md` whenever a change affects user-visible behaviour (sources, results page, settings).

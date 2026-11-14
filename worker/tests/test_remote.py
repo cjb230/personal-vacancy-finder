@@ -290,3 +290,12 @@ def test_hn_salary(line, expected):
     else:
         assert (salary["salary_min"], salary["salary_max"], salary["salary_currency"]) == (
             Decimal(expected[0]), Decimal(expected[1]), expected[2])
+
+
+
+def test_himalayas_paces_requests_three_seconds_apart_by_default(monkeypatch):
+    monkeypatch.delenv("HIMALAYAS_DELAY_SECONDS", raising=False)
+    assert HimalayasCollector().delay == 3
+    assert HimalayasCollector(delay_seconds=0).delay == 0
+    monkeypatch.setenv("HIMALAYAS_DELAY_SECONDS", "5")
+    assert HimalayasCollector().delay == 5
