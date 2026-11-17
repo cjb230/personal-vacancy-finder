@@ -47,7 +47,7 @@ def _rekey_companies(conn: psycopg.Connection) -> int:
         if others:
             _absorb_companies(conn, keep, others)
             # The plainest spelling: "Capgemini" over "Capgemini Polska", and the main brand
-            # over an alias: "ZnanyLekarz" over "Jameda".
+            # over an alias: "Docplanner" over "Jameda".
             name = min((names[i] for i in ids),
                        key=lambda n: (unaliased_company_key(n) != key, len(n)))
             conn.execute("UPDATE companies SET name = %s WHERE id = %s", (name, keep))

@@ -16,12 +16,13 @@ _COMPANY_SUFFIXES = {
 }
 
 # Brands that are one employer under different names, keyed by normalised name. The value is
-# the key they all share: ZnanyLekarz trades as MioDottore in Italy and Jameda in Germany,
-# and TuoTempo is its scheduling product.
+# the key they all share: Docplanner trades as ZnanyLekarz in Poland, MioDottore in Italy and
+# Jameda in Germany, and TuoTempo is its scheduling product.
 _COMPANY_ALIASES = {
-    "tuotempo": "znanylekarz",
-    "miodottore": "znanylekarz",
-    "jameda": "znanylekarz",
+    "znanylekarz": "docplanner",
+    "tuotempo": "docplanner",
+    "miodottore": "docplanner",
+    "jameda": "docplanner",
 }
 
 # Words that vary between adverts for the same role.
@@ -49,7 +50,7 @@ def normalize_company(name: str) -> str:
 
 
 def unaliased_company_key(name: str) -> str:
-    """normalize_company without the alias step: tells "Jameda" from "ZnanyLekarz"."""
+    """normalize_company without the alias step: tells "Jameda" from "Docplanner"."""
     words = _ascii_words(name)
     while len(words) > 1 and words[-1] in _COMPANY_SUFFIXES:
         words.pop()
