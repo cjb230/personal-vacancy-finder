@@ -15,6 +15,11 @@ _COMPANY_SUFFIXES = {
     "polska", "poland",
 }
 
+# Legal forms of several words, as their words joined. They only count as a whole, so a name
+# ending in a plain "de" keeps it. Mexican "S.A. de C.V." also comes as "SA de CV" or "S.A.de C.V.".
+_COMPANY_PHRASE_SUFFIXES = {"sadecv"}
+_LONGEST_PHRASE_SUFFIX = 3
+
 # Brands that are one employer under different names, keyed by normalised name. The value is
 # the key they all share: Docplanner trades as ZnanyLekarz in Poland, MioDottore in Italy,
 # Jameda in Germany and Doctoralia in Spain and Latin America, and TuoTempo is its scheduling
@@ -55,8 +60,15 @@ def normalize_company(name: str) -> str:
 def unaliased_company_key(name: str) -> str:
     """normalize_company without the alias step: tells "Jameda" from "Docplanner"."""
     words = _ascii_words(name)
-    while len(words) > 1 and words[-1] in _COMPANY_SUFFIXES:
-        words.pop()
+    while len(words) > 1:
+        if words[-1] in _COMPANY_SUFFIXES:
+            words.pop()
+            continue
+        phrase = next((n for n in range(2, min(_LONGEST_PHRASE_SUFFIX, len(words) - 1) + 1)
+                       if "".join(words[-n:]) in _COMPANY_PHRASE_SUFFIXES), None)
+        if phrase is None:
+            break
+        del words[-phrase:]
     return "".join(words)
 
 
