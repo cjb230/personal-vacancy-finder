@@ -8,7 +8,13 @@ from collections import defaultdict
 
 import psycopg
 
-from .normalize import PLACEHOLDER_TITLE, UNKNOWN_COMPANY, job_fingerprint, normalize_company
+from .normalize import (
+    PLACEHOLDER_TITLE,
+    UNKNOWN_COMPANY,
+    job_fingerprint,
+    normalize_company,
+    unaliased_company_key,
+)
 
 log = logging.getLogger(__name__)
 
@@ -36,12 +42,14 @@ def _rekey_companies(conn: psycopg.Connection) -> int:
     names = {company_id: name for company_id, name, _ in rows}
 
     merged = 0
-    for ids in groups.values():
+    for key, ids in groups.items():
         keep, *others = ids
         if others:
             _absorb_companies(conn, keep, others)
-            # The plainest spelling: "Capgemini" over "Capgemini Polska".
-            name = min((names[i] for i in ids), key=len)
+            # The plainest spelling: "Capgemini" over "Capgemini Polska", and the main brand
+            # over an alias: "Docplanner" over "Jameda".
+            name = min((names[i] for i in ids),
+                       key=lambda n: (unaliased_company_key(n) != key, len(n)))
             conn.execute("UPDATE companies SET name = %s WHERE id = %s", (name, keep))
             merged += len(others)
     # Two passes, so no row takes a key that another row still holds.

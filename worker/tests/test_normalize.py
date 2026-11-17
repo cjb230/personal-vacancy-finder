@@ -29,6 +29,14 @@ def test_company_accents_are_folded():
     assert normalize_company("Łódź Robotics GmbH") == "lodzrobotics"
 
 
+def test_company_aliases_share_one_key():
+    names = ["Docplanner", "ZnanyLekarz", "TuoTempo", "MioDottore", "Jameda GmbH",
+             "Znany Lekarz Sp. z o.o."]
+    assert {normalize_company(n) for n in names} == {"docplanner"}
+    assert job_fingerprint("Jameda", "Engineering Manager") == job_fingerprint(
+        "Docplanner", "Engineering Manager")
+
+
 def test_single_word_company_keeps_its_name():
     assert normalize_company("Group") == "group"
 
