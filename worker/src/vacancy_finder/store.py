@@ -327,7 +327,8 @@ def confirm_tracked_jobs(conn: psycopg.Connection) -> tuple[int, int]:
     list every current advert (see the job_confirmation view; email alerts can't say an advert
     has gone). When none of a job's adverts there is open any more, the time is kept in
     ad_gone_at, and an interested job becomes missed; an applied job stays applied. If an
-    advert comes back, both are undone. Returns (newly gone, back again)."""
+    advert comes back, both are undone, except for a job James marked missed himself
+    (missed_by_hand), which stays missed. Returns (newly gone, back again)."""
     gone = conn.execute(
         """
         UPDATE job_reviews r
@@ -345,6 +346,7 @@ def confirm_tracked_jobs(conn: psycopg.Connection) -> tuple[int, int]:
             decision = CASE WHEN r.decision = 'missed' THEN 'interested' ELSE r.decision END
         FROM job_confirmation cf
         WHERE cf.job_id = r.job_id AND cf.still_listed AND r.ad_gone_at IS NOT NULL
+          AND NOT (r.decision = 'missed' AND r.missed_by_hand)
         """
     ).rowcount
     return gone, back

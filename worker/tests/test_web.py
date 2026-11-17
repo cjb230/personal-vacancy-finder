@@ -2,7 +2,7 @@
 
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -324,6 +324,55 @@ def test_gone_button_only_on_unjudged_jobs_and_has_its_own_tab(conn, monkeypatch
     conn.commit()
     assert conn.execute("SELECT decision FROM job_reviews WHERE job_id = %s",
                         (ids["Engineering Manager"],)).fetchone()[0] == "gone"
+
+
+def test_missed_button_on_interested_jobs_sticks_while_an_advert_is_listed(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    board = ensure_source(conn, "test", "Test board", "board")
+    ad = dict(company_name="Orbit", location_text="Remote, Europe", work_mode="remote",
+              description="Python and PostgreSQL for satellite imagery. You will lead the team.")
+    for n, title in (("1", "Engineering Manager"), ("2", "Director of Engineering")):
+        upsert_posting(conn, board, RawPosting(external_id=n, url=f"https://x.example/{n}",
+                                               title=title, **ad))
+    conn.commit()
+    score_all(conn)
+    ids = dict(conn.execute("SELECT title, id FROM jobs").fetchall())
+    missed_button = 'name="decision" value="missed"'
+    assert missed_button not in web.render("match", "", 0) + web.render("maybe", "", 0)
+    for job_id in ids.values():
+        web.save_review(job_id, "interested")
+    assert web.render("interested", "", 0).count(missed_button) == 2
+
+    # The board still lists the manager job's advert, but James knows it has gone.
+    web.save_review(ids["Engineering Manager"], "missed")
+    confirm_tracked_jobs(conn)
+    conn.commit()
+    page = web.render("missed", "", 0)
+    assert "Missed (1)" in page and "Interested (1)" in page
+    main = page.split("<main>")[1]
+    assert "Engineering Manager" in main and "marked missed by hand" in main
+    assert missed_button in main  # shown on, as the job's decision
+
+    # A job the source check marked missed still goes back when its advert returns.
+    conn.execute("UPDATE postings SET last_seen_at = now() - interval '1 hour' WHERE external_id = '2'")
+    close_unseen(conn, board, datetime.now(UTC) - timedelta(minutes=1))
+    confirm_tracked_jobs(conn)
+    conn.commit()
+    assert "Missed (2)" in web.render("missed", "", 0)
+    upsert_posting(conn, board, RawPosting(external_id="2", url="https://x.example/2",
+                                           title="Director of Engineering", **ad))
+    confirm_tracked_jobs(conn)
+    conn.commit()
+    decisions = dict(conn.execute("SELECT job_id, decision FROM job_reviews").fetchall())
+    assert decisions == {ids["Engineering Manager"]: "missed", ids["Director of Engineering"]: "interested"}
+
+    # Another decision, or Clear, undoes a Missed marked by hand.
+    web.save_review(ids["Engineering Manager"], "interested")
+    assert conn.execute("SELECT missed_by_hand FROM job_reviews WHERE job_id = %s",
+                        (ids["Engineering Manager"],)).fetchone() == (False,)
+    web.save_review(ids["Engineering Manager"], "")
+    assert conn.execute("SELECT 1 FROM job_reviews WHERE job_id = %s",
+                        (ids["Engineering Manager"],)).fetchone() is None
 
 
 def test_role_toggles_hide_staff_manager_and_director(conn, monkeypatch):  # noqa: F811

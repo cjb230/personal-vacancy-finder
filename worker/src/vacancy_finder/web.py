@@ -51,11 +51,14 @@ log = logging.getLogger(__name__)
 
 PAGE_SIZE = 100
 DECISIONS = {"interested": "Interested", "not_interested": "Not interested", "applied": "Applied",
-             "rejected": "Rejected", "gone": "Gone"}
+             "missed": "Missed", "rejected": "Rejected", "gone": "Gone"}
 # Decisions whose button shows only on jobs with one of these decisions: an application can
-# only be rejected once it has been made, and "Gone" (the advert vanished before James judged
-# the job) is only for jobs he hasn't judged, so it never stands in for a real "no".
-DECISION_NEEDS = {"rejected": {"applied", "rejected"}, "gone": {None, "gone"}}
+# only be rejected once it has been made, "Gone" (the advert vanished before James judged
+# the job) is only for jobs he hasn't judged, so it never stands in for a real "no", and
+# "Missed" is for an interested job whose advert went before he applied. The source check
+# marks those itself where it can; the button covers adverts it can't see go.
+DECISION_NEEDS = {"rejected": {"applied", "rejected"}, "gone": {None, "gone"},
+                  "missed": {"interested", "missed"}}
 # Feedback kinds, as (label, takes a note). Notes are kept to improve the filters later;
 # score_higher/score_lower only record which way the weights should move for this job.
 FEEDBACK = {
@@ -158,7 +161,8 @@ SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.dec
                WHERE p.job_id = j.id AND p.closed_at IS NULL AND so.key = 'himalayas')
        AND NOT EXISTS (SELECT 1 FROM postings p JOIN sources so ON so.id = p.source_id
                        WHERE p.job_id = j.id AND p.closed_at IS NULL AND so.kind = 'ats')
-       AND NOT COALESCE(c.tracked AND c.ats_kind IS NOT NULL, false) AS needs_employer
+       AND NOT COALESCE(c.tracked AND c.ats_kind IS NOT NULL, false) AS needs_employer,
+       COALESCE(r.missed_by_hand, false)
 FROM jobs j
 JOIN job_scores s ON s.job_id = j.id
 LEFT JOIN job_reviews r ON r.job_id = j.id
@@ -428,7 +432,7 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     for (job_id, job_title, company, verdict, score, level, reasons, decision, first_seen,
          closes_at, is_deadline, closed_already, applied_at, application_dir, url, locations,
          sources, checkable, confirmed_at, ad_gone_at, last_seen, reviewed_at, lacks_text,
-         pasted, needs_employer) in rows:
+         pasted, needs_employer, missed_by_hand) in rows:
         # Checking against the employer's advert matters for jobs James might go for.
         ask_employer = needs_employer and (decision == "interested" or (
             decision is None and verdict == "maybe"))
@@ -450,7 +454,9 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     <span>{esc(company)}</span></div>
   <div class="meta">{render_locations(locations)} · {esc(sources)} ·
     first seen {first_seen:%d %b %H:%M}{render_closing(closes_at, is_deadline, closed_already)}{
-    render_confirmed(checkable, confirmed_at, ad_gone_at, last_seen) if view in CONFIRMED_VIEWS else ""}{
+    render_confirmed(checkable, confirmed_at, ad_gone_at, last_seen,
+                     reviewed_at if missed_by_hand and decision == "missed" else None)
+    if view in CONFIRMED_VIEWS else ""}{
     render_describe(job_id, job_title, pasted, back) if lacks_text or pasted is not None else ""}{
     render_employer_link(job_id, company, back) if ask_employer else ""}{
     render_add_link(job_id, job_title)}</div>
@@ -569,10 +575,14 @@ def render_closing(closes_at: datetime | None, is_deadline: bool, passed: bool) 
 
 
 def render_confirmed(checkable: bool, confirmed_at: datetime | None,
-                     ad_gone_at: datetime | None, last_seen: datetime) -> str:
-    """" · advert gone 2 Nov 17:30" once a tracked job's adverts have gone, " · confirmed
-    2 Nov 17:30" while one is still listed, or a note that a job known only from email alerts
-    can't be confirmed. Times are DISPLAY_TZ local times."""
+                     ad_gone_at: datetime | None, last_seen: datetime,
+                     missed_by_hand_at: datetime | None = None) -> str:
+    """" · marked missed by hand 2 Nov" for a job James marked missed, " · advert gone 2 Nov
+    17:30" once a tracked job's adverts have gone, " · confirmed 2 Nov 17:30" while one is
+    still listed, or a note that a job known only from email alerts can't be confirmed. Times
+    are DISPLAY_TZ local times."""
+    if missed_by_hand_at is not None:
+        return f' · <span class="gone">marked missed by hand {missed_by_hand_at:%d %b %H:%M}</span>'
     if ad_gone_at is not None:
         return f' · <span class="gone">advert gone {ad_gone_at:%d %b %H:%M}</span>'
     if checkable:
@@ -920,17 +930,18 @@ def save_review(job_id: int, decision: str, applied_at: datetime | None = None,
                         coalesce(%(at)s::timestamp AT TIME ZONE %(tz)s, now()), NULLIF(%(dir)s, ''))
                 ON CONFLICT (job_id) DO UPDATE SET decision = EXCLUDED.decision,
                     applied_at = EXCLUDED.applied_at, application_dir = EXCLUDED.application_dir,
-                    updated_at = now()
+                    missed_by_hand = false, updated_at = now()
                 """,
                 {"job_id": job_id, "at": applied_at, "tz": DISPLAY_TZ, "dir": application_dir},
             )
         elif decision:
             conn.execute(
                 """
-                INSERT INTO job_reviews (job_id, decision) VALUES (%s, %s)
-                ON CONFLICT (job_id) DO UPDATE SET decision = EXCLUDED.decision, updated_at = now()
+                INSERT INTO job_reviews (job_id, decision, missed_by_hand) VALUES (%s, %s, %s)
+                ON CONFLICT (job_id) DO UPDATE SET decision = EXCLUDED.decision,
+                    missed_by_hand = EXCLUDED.missed_by_hand, updated_at = now()
                 """,
-                (job_id, decision),
+                (job_id, decision, decision == "missed"),
             )
         else:
             conn.execute("DELETE FROM job_reviews WHERE job_id = %s", (job_id,))
