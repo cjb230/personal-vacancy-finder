@@ -234,6 +234,7 @@ form.filters input[type=number] { width:64px; }
 form.filters a { color:var(--accent); text-decoration:none; }
 main { padding:8px 20px 40px; max-width:1100px; }
 .job { padding:12px 0; border-bottom:1px solid var(--line); }
+.job.moved { padding:8px 0; font-size:13px; color:var(--muted); }
 .top { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
 .score { font-weight:600; min-width:34px; }
 .match .score { color:var(--good); } .maybe .score { color:var(--warn); } .no .score { color:var(--bad); }
@@ -305,6 +306,51 @@ function openApply(id) {
   }
   form.elements.application_dir.focus();
 }
+// Decisions (the job's buttons, Clear and the Applied form) are sent without reloading the
+// page, so a long list keeps its place. The job's card is swapped for its new state, or for a
+// short note when the decision moves it to another tab, and the tab counts are refreshed.
+// Without scripts, or if the request can't be sent, the form posts as usual.
+document.addEventListener("submit", async (event) => {
+  const form = event.target;
+  if (form.getAttribute("action") !== "/review" || form.dataset.plain) return;
+  event.preventDefault();
+  const button = event.submitter;
+  const data = new FormData(form, button);
+  let response, text;
+  try {
+    response = await fetch("/review", {method: "POST", body: new URLSearchParams(data)});
+    text = await response.text();
+  } catch (e) {
+    form.dataset.plain = "1";
+    form.requestSubmit(button);
+    return;
+  }
+  if (!response.ok) {  // e.g. CV tailoring couldn't start: show the server's page
+    document.open(); document.write(text); document.close();
+    return;
+  }
+  const fresh = new DOMParser().parseFromString(text, "text/html");
+  const id = "job-" + data.get("job_id");
+  const card = document.getElementById(id);
+  if (card) {
+    const updated = fresh.getElementById(id);
+    if (updated) {
+      card.replaceWith(updated);
+    } else {
+      const note = document.createElement("div");
+      note.className = "job moved";
+      note.id = id;
+      const label = (button && button.textContent.trim()) || "";
+      const title = card.querySelector(".title");
+      note.textContent = (title ? title.textContent.trim() + ": " : "") + (
+        data.get("decision") ? "marked " + label.toLowerCase() : "decision cleared") +
+        ", so it has moved to another tab.";
+      card.replaceWith(note);
+    }
+  }
+  const nav = document.querySelector("header nav"), freshNav = fresh.querySelector("header nav");
+  if (nav && freshNav) nav.replaceWith(freshNav);
+});
 // The "Last checked" box stays open or closed across reloads, as last left.
 document.addEventListener("DOMContentLoaded", () => {
   const box = document.querySelector("details.checked");
