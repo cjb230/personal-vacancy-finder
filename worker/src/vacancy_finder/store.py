@@ -85,10 +85,104 @@ def ensure_job(conn: psycopg.Connection, company_id: int, posting: RawPosting,
     return row[0]
 
 
+def pinned_job(conn: psycopg.Connection, source_id: int, posting: RawPosting) -> int | None:
+    """The job James pinned this advert to (Add link), touched as ensure_job touches the job a
+    posting joins; None when it isn't pinned, so it joins by company and title as usual."""
+    row = conn.execute(
+        """
+        UPDATE jobs j SET
+            last_seen_at = now(),
+            status = 'open',
+            location_text = COALESCE(j.location_text, %(location)s),
+            work_mode = CASE WHEN j.work_mode = 'unknown' THEN %(mode)s ELSE j.work_mode END
+        FROM job_links l
+        WHERE l.source_id = %(source)s AND l.external_id = %(external_id)s AND j.id = l.job_id
+        RETURNING j.id
+        """,
+        {"source": source_id, "external_id": posting.external_id,
+         "location": posting.location_text, "mode": posting.work_mode},
+    ).fetchone()
+    return row[0] if row else None
+
+
+def pin_posting(conn: psycopg.Connection, source_id: int, external_id: str, job_id: int) -> None:
+    """Pin the advert (source_id, external_id) to `job_id`, now and for every later collection.
+    If it is already stored on another job, it moves; a job that leaves empty is merged into
+    `job_id`, keeping James's decision and pasted text on it."""
+    conn.execute(
+        """
+        INSERT INTO job_links (source_id, external_id, job_id) VALUES (%s, %s, %s)
+        ON CONFLICT (source_id, external_id) DO UPDATE SET job_id = EXCLUDED.job_id
+        """,
+        (source_id, external_id, job_id),
+    )
+    row = conn.execute("SELECT job_id FROM postings WHERE source_id = %s AND external_id = %s",
+                       (source_id, external_id)).fetchone()
+    if row is None or row[0] == job_id:
+        return
+    old = row[0]
+    conn.execute("UPDATE postings SET job_id = %s WHERE source_id = %s AND external_id = %s",
+                 (job_id, source_id, external_id))
+    if not conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM postings WHERE job_id = %s)", (old,)).fetchone()[0]:
+        merge_jobs(conn, job_id, [old])
+
+
+def merge_jobs(conn: psycopg.Connection, keep: int, others: list[int]) -> None:
+    """Fold the `others` jobs into `keep`: their postings, pins, dates and status, and James's
+    latest decision and pasted text where `keep` has none. Then delete them."""
+    conn.execute("UPDATE postings SET job_id = %s WHERE job_id = ANY(%s)", (keep, others))
+    conn.execute("UPDATE job_links SET job_id = %s WHERE job_id = ANY(%s)", (keep, others))
+    conn.execute(
+        """
+        UPDATE jobs k SET
+            first_seen_at = LEAST(k.first_seen_at, o.first_seen_at),
+            last_seen_at = GREATEST(k.last_seen_at, o.last_seen_at),
+            status = CASE WHEN k.status = 'open' OR o.any_open THEN 'open' ELSE 'closed' END,
+            location_text = COALESCE(k.location_text, o.location_text),
+            work_mode = CASE WHEN k.work_mode = 'unknown' THEN o.work_mode ELSE k.work_mode END,
+            excluded = k.excluded OR o.any_excluded
+        FROM (
+            SELECT min(first_seen_at) AS first_seen_at, max(last_seen_at) AS last_seen_at,
+                   bool_or(status = 'open') AS any_open, bool_or(excluded) AS any_excluded,
+                   max(location_text) AS location_text,
+                   COALESCE(max(work_mode) FILTER (WHERE work_mode <> 'unknown'), 'unknown')
+                       AS work_mode
+            FROM jobs WHERE id = ANY(%(others)s)
+        ) o
+        WHERE k.id = %(keep)s
+        """,
+        {"keep": keep, "others": others},
+    )
+    # Keep James's decision on any of them, unless the kept job already has one.
+    conn.execute(
+        """
+        UPDATE job_reviews SET job_id = %(keep)s
+        WHERE job_id = (SELECT job_id FROM job_reviews WHERE job_id = ANY(%(others)s)
+                        ORDER BY updated_at DESC LIMIT 1)
+          AND NOT EXISTS (SELECT 1 FROM job_reviews WHERE job_id = %(keep)s)
+        """,
+        {"keep": keep, "others": others},
+    )
+    # Likewise text James pasted for any of them (the latest), unless the kept job has some.
+    conn.execute(
+        """
+        UPDATE job_descriptions SET job_id = %(keep)s
+        WHERE job_id = (SELECT job_id FROM job_descriptions WHERE job_id = ANY(%(others)s)
+                        ORDER BY pasted_at DESC LIMIT 1)
+          AND NOT EXISTS (SELECT 1 FROM job_descriptions WHERE job_id = %(keep)s)
+        """,
+        {"keep": keep, "others": others},
+    )
+    conn.execute("DELETE FROM jobs WHERE id = ANY(%s)", (others,))
+
+
 def upsert_posting(conn: psycopg.Connection, source_id: int, posting: RawPosting) -> bool:
     """Store one posting. Returns True if it had not been seen before."""
     company_id = ensure_company(conn, posting)
-    job_id = ensure_job(conn, company_id, posting, posting_fingerprint(source_id, posting))
+    job_id = pinned_job(conn, source_id, posting)
+    if job_id is None:
+        job_id = ensure_job(conn, company_id, posting, posting_fingerprint(source_id, posting))
     fields = asdict(posting)
     if fields["language"] is None:
         fields["language"] = detect_language(posting.description) or detect_title_language(

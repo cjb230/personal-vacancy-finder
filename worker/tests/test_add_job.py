@@ -159,3 +159,43 @@ def test_job_posting_found_alone_or_in_a_list():
     assert remote.work_mode == "remote" and remote.location_text == "Remote" and remote.posted_at is None
     assert isinstance(add_job.posting_from_ld({**item, "datePosted": "2026-11-02"}, "k", "u").posted_at,
                       datetime)
+
+
+ASHBY_FEED = "https://api.ashbyhq.com/posting-api/job-board/acme?includeCompensation=true"
+EMBED_URL = "https://www.acme.example/careers?ashby_location_id=x1&ashby_jid=2a3b"
+
+
+def embedding_page(embed: str = '<script src="https://jobs.ashbyhq.com/acme/embed?version=2">'
+                   ) -> dict[str, httpx.Response]:
+    return {
+        "https://www.acme.example/robots.txt": httpx.Response(200, text="User-agent: *\nAllow: /\n"),
+        EMBED_URL: httpx.Response(200, text=f"<html><body><div id='ashby_embed'></div>{embed}</body></html>"),
+        ASHBY_FEED: httpx.Response(200, text=(FIXTURES / "ashby.json").read_text()),
+    }
+
+
+def test_company_page_embedding_its_ashby_board():
+    requests = []
+    draft = add_job.read(EMBED_URL, NoDb(), client(embedding_page(), requests))
+    assert requests == ["https://www.acme.example/robots.txt", EMBED_URL, ASHBY_FEED]
+    assert draft.ats == ("ashby", "acme")
+    assert draft.title == "Engineering Lead"  # the advert ashby_jid names, not the other one
+    assert draft.feed_external_id == "acme:2a3b"
+    assert draft.read_from == "Ashby job boards"
+    assert draft.url == EMBED_URL  # the address James pasted is kept
+
+
+def test_embedded_board_needs_the_advert_param_and_one_board():
+    page = '<a href="https://jobs.ashbyhq.com/acme">Jobs</a>'
+    assert add_job.embedded_board(EMBED_URL, page) == ("ashby", "acme")
+    assert add_job.embedded_board("https://www.acme.example/careers", page) is None
+    two = page + '<a href="https://jobs.ashbyhq.com/other">'
+    assert add_job.embedded_board(EMBED_URL, two) is None
+    assert add_job.embedded_board("https://acme.example/jobs?gh_jid=4012345",
+                                  '<script src="https://boards.greenhouse.io/embed/job_board?for=acme">'
+                                  ) == ("greenhouse", "acme")
+
+
+def test_company_page_without_a_board_is_read_as_any_page():
+    draft = add_job.read(EMBED_URL, NoDb(), client(embedding_page(embed="")))
+    assert draft.ats is None and "JobPosting" in draft.problem

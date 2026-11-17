@@ -9,8 +9,11 @@ James pastes an advert's address. read() tries to read the advert, in this order
    Teamtailor, Recruitee, Traffit, Comeet): the company's whole feed is read with its
    collector and the advert picked out of it.
 3. A Just Join IT advert page, with that collector's page parser.
-4. Any other page, if its robots.txt allows us: one fetch, read from the schema.org
-   JobPosting block most careers sites include. The description is never guessed from the
+4. Any other page, if its robots.txt allows us: one fetch. A company's own careers page that
+   embeds its Ashby or Greenhouse board names the advert in the address (?ashby_jid=...,
+   ?gh_jid=...), so when the page links exactly one such board the advert is picked out of
+   that board's feed, as in 2. Otherwise it is read from the schema.org JobPosting block most
+   careers sites include. The description is never guessed from the
    page's other text, since a wrong guess would be scored as if it were real.
 
 Whatever is found fills in the form, which James checks or completes (pasting the description
@@ -18,6 +21,10 @@ when the page couldn't be read) before save() stores it. Saved adverts belong to
 source and go through upsert_posting, so they join an existing job with the same company and
 title. For a careers system, save() can also start following the company's whole feed, as the
 Employer link button does.
+
+The same form also backs a job's Add link button: with a job_id, the advert is pinned to that
+job (store.pin_posting) instead of joining one by company and title, and so is the careers
+feed's own copy of it, for when that feed is collected.
 """
 
 import json
@@ -44,7 +51,7 @@ from .collectors.justjoinit import (
 from .discover import find_boards
 from .models import RawPosting
 from .normalize import normalize_company
-from .store import ensure_source, posting_fingerprint, upsert_posting
+from .store import ensure_source, pin_posting, posting_fingerprint, upsert_posting
 
 SOURCE_KEY = "manual"
 SOURCE_NAME = "Added by hand"
@@ -63,6 +70,10 @@ NEVER_FETCH = {
 # from different places has one address.
 _TRACKING = re.compile(r"^(utm_.*|ref|refid|referrer|source|src|trk|trackingid|gh_src|lever-source.*"
                        r"|lever-origin|fbclid|gclid|mc_[a-z]+|_hs[a-z]+)$", re.I)
+
+# Query parameters by which a company's own careers page names one advert of the board it
+# embeds, e.g. https://www.dualentry.com/careers?ashby_jid=bb7da28b-... (Ashby's embed).
+EMBED_JOB_PARAMS = {"ashby_jid": "ashby", "gh_jid": "greenhouse"}
 
 # Fields of a read advert that the form doesn't show but that are kept for scoring (pay,
 # contract, dates). They ride along in a hidden field between reading and saving.
@@ -85,6 +96,8 @@ class Draft:
     ats: tuple[str, str] | None = None  # (ats_kind, ats_slug) when on a careers system we read
     read_from: str = ""  # where the details came from, e.g. "Greenhouse"
     problem: str = ""  # why the advert couldn't be read (fully), shown above the form
+    feed_external_id: str = ""  # the advert's id in its careers feed, when read from one
+    job_id: int | None = None  # with Add link: the job the advert is pinned to
 
 
 @dataclass
@@ -92,6 +105,7 @@ class Saved:
     job_id: int
     title: str
     joined: bool  # True when the advert joined a job that was already stored
+    linked: bool = False  # True when it was pinned to a chosen job (Add link)
     followed: str = ""  # what happened about following the company's careers feed
 
 
@@ -119,13 +133,14 @@ def never_fetch(url: str) -> str | None:
     return None
 
 
-def read(url: str, conn: psycopg.Connection, client: httpx.Client) -> Draft:
+def read(url: str, conn: psycopg.Connection, client: httpx.Client,
+         job_id: int | None = None) -> Draft:
     """Read what can be read about the advert at `url`. Never raises for an advert that can't
     be read: the draft's problem says why, and James pastes the rest. Raises ValueError only
     for something that isn't a web address."""
     url = check_url(url)
     linkedin = external_id_for(url)
-    draft = Draft(url=canonical_url(url), external_id=linkedin or canonical_url(url))
+    draft = Draft(url=canonical_url(url), external_id=linkedin or canonical_url(url), job_id=job_id)
     if linkedin:
         draft.url = f"https://www.linkedin.com/jobs/view/{linkedin.partition(':')[2]}/"
     if reason := never_fetch(url):
@@ -139,7 +154,7 @@ def read(url: str, conn: psycopg.Connection, client: httpx.Client) -> Draft:
         elif url.startswith(OFFER_PREFIX):
             _read_justjoinit(draft, url, client)
         else:
-            _read_page(draft, draft.url, client)  # without the click-tracking parameters
+            _read_page(draft, draft.url, conn, client)  # without the click-tracking parameters
     except employer.READ_ERRORS as exc:
         draft.problem = f"The advert couldn't be read ({_short(exc)}). Paste the job's details below."
         return draft
@@ -194,6 +209,7 @@ def _read_from_feed(draft: Draft, url: str, conn: psycopg.Connection, client: ht
                          "have closed. Paste the job's details below if it is still open.")
         return
     _fill(draft, found, source_name)
+    draft.feed_external_id = found.external_id
     draft.company = name  # the feeds don't name the company; James can correct the guess
 
 
@@ -245,12 +261,30 @@ def _read_justjoinit(draft: Draft, url: str, client: httpx.Client) -> None:
     _fill(draft, posting, "Just Join IT")
 
 
-def _read_page(draft: Draft, url: str, client: httpx.Client) -> None:
+def embedded_board(url: str, page: str) -> tuple[str, str] | None:
+    """The (ats_kind, ats_slug) of the board a careers page embeds, when the page's address
+    names one of that board's adverts (EMBED_JOB_PARAMS) and the page links exactly one board
+    of that kind."""
+    params = {k.lower() for k, _ in parse_qsl(urlsplit(url).query)}
+    for param, kind in EMBED_JOB_PARAMS.items():
+        if param in params:
+            boards = {board for board in find_boards(page) if board[0] == kind}
+            if len(boards) == 1:
+                return boards.pop()
+    return None
+
+
+def _read_page(draft: Draft, url: str, conn: psycopg.Connection, client: httpx.Client) -> None:
     if not allowed_by_robots(client, url):
         draft.problem = ("This site's robots.txt asks automated tools not to read this page, so it "
                          "wasn't fetched. Paste the job's details below.")
         return
-    item = find_job_posting(_get(client, url))
+    page = _get(client, url)
+    if board := embedded_board(url, page):
+        draft.ats = board
+        _read_from_feed(draft, url, conn, client)
+        return
+    item = find_job_posting(page)
     if item is None:
         draft.problem = ("The page has no job details the finder can read (no schema.org "
                          "JobPosting block). Paste them below.")
@@ -396,8 +430,10 @@ def extra_from_json(text: str) -> dict[str, Any]:
 def save(conn: psycopg.Connection, draft: Draft, follow: bool = False,
          client: httpx.Client | None = None) -> Saved:
     """Store the advert as James completed it, and with follow (on a careers system we read)
-    start following the company's careers feed. Commits; the caller rescores. Raises
-    ValueError for a form that is missing the title, company or description."""
+    start following the company's careers feed. With draft.job_id (Add link) the advert, and
+    its careers-feed copy, are pinned to that job. Commits; the caller rescores. Raises
+    ValueError for a form that is missing the title, company or description, or for a job
+    that no longer exists."""
     title, company = draft.title.strip()[:500], draft.company.strip()[:500]
     description = clean_description(draft.description)
     if not title or not company:
@@ -413,7 +449,16 @@ def save(conn: psycopg.Connection, draft: Draft, follow: bool = False,
         description=description, raw={"added_by_hand": True, "read_from": draft.read_from},
         **draft.extra)
     source_id = ensure_source(conn, SOURCE_KEY, SOURCE_NAME, SOURCE_KIND)
-    joined = conn.execute(
+    if draft.job_id is not None:
+        if conn.execute("SELECT 1 FROM jobs WHERE id = %s", (draft.job_id,)).fetchone() is None:
+            raise ValueError("That job is no longer stored, so the link can't be added to it.")
+        pin_posting(conn, source_id, posting.external_id, draft.job_id)
+        if draft.ats and draft.feed_external_id:
+            collector = employer.collector_for(draft.ats[0])
+            feed_source = ensure_source(conn, collector.source_key, collector.source_name,
+                                        collector.source_kind)
+            pin_posting(conn, feed_source, draft.feed_external_id, draft.job_id)
+    joined = draft.job_id is not None or conn.execute(
         """
         SELECT EXISTS (SELECT 1 FROM jobs j WHERE j.fingerprint = %s AND EXISTS (
             SELECT 1 FROM postings p WHERE p.job_id = j.id
@@ -429,7 +474,7 @@ def save(conn: psycopg.Connection, draft: Draft, follow: bool = False,
     followed = ""
     if follow and draft.ats:
         followed = _follow(conn, draft.ats, job_id, client)
-    return Saved(job_id, title, joined, followed)
+    return Saved(job_id, title, joined, followed=followed, linked=draft.job_id is not None)
 
 
 def _follow(conn: psycopg.Connection, ats: tuple[str, str], job_id: int,

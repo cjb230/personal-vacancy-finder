@@ -15,6 +15,7 @@ from .normalize import (
     normalize_company,
     unaliased_company_key,
 )
+from .store import merge_jobs
 
 log = logging.getLogger(__name__)
 
@@ -114,49 +115,7 @@ def _rekey_jobs(conn: psycopg.Connection) -> int:
         keep, *others = ids
         if not others:
             continue
-        conn.execute("UPDATE postings SET job_id = %s WHERE job_id = ANY(%s)", (keep, others))
-        conn.execute(
-            """
-            UPDATE jobs k SET
-                first_seen_at = LEAST(k.first_seen_at, o.first_seen_at),
-                last_seen_at = GREATEST(k.last_seen_at, o.last_seen_at),
-                status = CASE WHEN k.status = 'open' OR o.any_open THEN 'open' ELSE 'closed' END,
-                location_text = COALESCE(k.location_text, o.location_text),
-                work_mode = CASE WHEN k.work_mode = 'unknown' THEN o.work_mode ELSE k.work_mode END,
-                excluded = k.excluded OR o.any_excluded
-            FROM (
-                SELECT min(first_seen_at) AS first_seen_at, max(last_seen_at) AS last_seen_at,
-                       bool_or(status = 'open') AS any_open, bool_or(excluded) AS any_excluded,
-                       max(location_text) AS location_text,
-                       COALESCE(max(work_mode) FILTER (WHERE work_mode <> 'unknown'), 'unknown')
-                           AS work_mode
-                FROM jobs WHERE id = ANY(%(others)s)
-            ) o
-            WHERE k.id = %(keep)s
-            """,
-            {"keep": keep, "others": others},
-        )
-        # Keep James's decision on any of them, unless the kept job already has one.
-        conn.execute(
-            """
-            UPDATE job_reviews SET job_id = %(keep)s
-            WHERE job_id = (SELECT job_id FROM job_reviews WHERE job_id = ANY(%(others)s)
-                            ORDER BY updated_at DESC LIMIT 1)
-              AND NOT EXISTS (SELECT 1 FROM job_reviews WHERE job_id = %(keep)s)
-            """,
-            {"keep": keep, "others": others},
-        )
-        # Likewise text James pasted for any of them (the latest), unless the kept job has some.
-        conn.execute(
-            """
-            UPDATE job_descriptions SET job_id = %(keep)s
-            WHERE job_id = (SELECT job_id FROM job_descriptions WHERE job_id = ANY(%(others)s)
-                            ORDER BY pasted_at DESC LIMIT 1)
-              AND NOT EXISTS (SELECT 1 FROM job_descriptions WHERE job_id = %(keep)s)
-            """,
-            {"keep": keep, "others": others},
-        )
-        conn.execute("DELETE FROM jobs WHERE id = ANY(%s)", (others,))
+        merge_jobs(conn, keep, others)
         merged += len(others)
     conn.execute("UPDATE jobs SET fingerprint = 'tmp:' || id")
     for key, (keep, *_) in groups.items():

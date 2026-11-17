@@ -9,9 +9,10 @@ import pytest
 from vacancy_finder import add_job, web
 from vacancy_finder.matching import score_all
 from vacancy_finder.models import RawPosting
-from vacancy_finder.store import ensure_source, upsert_posting
+from vacancy_finder.renormalize import renormalize
+from vacancy_finder.store import ensure_source, pin_posting, upsert_posting
 
-from .test_add_job import CAREERS_URL, careers_page, client
+from .test_add_job import CAREERS_URL, EMBED_URL, careers_page, client, embedding_page
 from .test_store import DB_URL, conn, count  # noqa: F401  (conn is a fixture)
 
 pytestmark = pytest.mark.skipif(not DB_URL, reason="TEST_DATABASE_URL not set")
@@ -127,3 +128,76 @@ def test_careers_system_company_followed(conn, monkeypatch):  # noqa: F811
     assert again.company == "Acme Space"
     status, html = web.save_added(form(again, description=TEXT, follow="1"))
     assert "already followed" in html
+
+
+RECRUITEE_URL = "https://acme.recruitee.com/o/senior-bank-integrations-engineer"
+ASHBY_URL = "https://jobs.ashbyhq.com/acme/2a3b"
+
+
+def recruitee_posting() -> RawPosting:
+    return RawPosting(external_id="acme:9", url=RECRUITEE_URL, company_name="Acme",
+                      title="Senior Bank & Integrations Engineer", description=TEXT, work_mode="remote")
+
+
+def test_add_link_pins_an_advert_with_another_title(conn, monkeypatch):  # noqa: F811
+    monkeypatch.setitem(os.environ, "DATABASE_URL", DB_URL)
+    recruitee = ensure_source(conn, "recruitee", "Recruitee", "ats")
+    upsert_posting(conn, recruitee, recruitee_posting())
+    job_id = conn.execute("SELECT id FROM jobs").fetchone()[0]
+    conn.execute("INSERT INTO job_reviews (job_id, decision) VALUES (%s, 'interested')", (job_id,))
+    conn.commit()
+    score_all(conn)
+    assert 'onclick="document.getElementById(\'link-' in web.render("interested", "", 0)
+
+    # The company's own careers page embeds its Ashby board, under another title.
+    monkeypatch.setattr(web, "add_client", lambda: client(embedding_page()))
+    status, html = web.read_added({"url": [EMBED_URL], "job_id": [str(job_id)]})
+    assert status == 200 and "<h2>Add a link</h2>" in html
+    assert "Senior Bank &amp; Integrations Engineer" in html and f'value="{job_id}"' in html
+    draft = add_job.read(EMBED_URL, conn, client(embedding_page()), job_id)
+    status, html = web.save_added(form(draft, description=TEXT, job_id=str(job_id),
+                                       feed_external_id=draft.feed_external_id))
+    assert status == 200 and "Link added" in html
+    assert count(conn, "SELECT count(*) FROM jobs") == 1
+    assert count(conn, f"SELECT count(*) FROM postings WHERE job_id = {job_id}") == 2
+    assert conn.execute("SELECT s.key, l.external_id FROM job_links l JOIN sources s ON s.id = l.source_id"
+                        " ORDER BY s.key").fetchall() == [("ashby", "acme:2a3b"), ("manual", EMBED_URL)]
+
+    # When the Ashby feed is collected, its copy lands on the same job, through re-keying too,
+    # and becomes the job's link even though Recruitee still lists its copy.
+    ashby = ensure_source(conn, "ashby", "Ashby job boards", "ats")
+    upsert_posting(conn, ashby, RawPosting(external_id="acme:2a3b", url=ASHBY_URL, company_name="Acme",
+                                           title="Engineering Lead", description=TEXT))
+    upsert_posting(conn, recruitee, recruitee_posting())  # still listed there
+    # Seen in this order: the advert added by hand, then Ashby's copy, then Recruitee's.
+    for url, minutes in ((ASHBY_URL, 10), (RECRUITEE_URL, 20)):
+        conn.execute("UPDATE postings SET last_seen_at = now() + make_interval(mins => %s)"
+                     " WHERE url = %s", (minutes, url))
+    conn.commit()
+    assert renormalize(conn) == (0, 0)
+    assert conn.execute("SELECT DISTINCT job_id FROM postings").fetchall() == [(job_id,)]
+    assert conn.execute("SELECT decision FROM job_reviews").fetchall() == [("interested",)]
+    score_all(conn)
+    assert f'class="title"><a href="{ASHBY_URL}"' in web.render("interested", "", 0)
+
+    # A job that has gone can't be linked to.
+    status, html = web.read_added({"url": [EMBED_URL], "job_id": ["999999"]})
+    assert status == 400 and "no longer stored" in html
+
+
+def test_pinning_a_stored_advert_merges_the_job_it_leaves(conn):  # noqa: F811
+    recruitee = ensure_source(conn, "recruitee", "Recruitee", "ats")
+    ashby = ensure_source(conn, "ashby", "Ashby job boards", "ats")
+    upsert_posting(conn, recruitee, recruitee_posting())
+    upsert_posting(conn, ashby, RawPosting(external_id="acme:2a3b", url=ASHBY_URL, company_name="Acme",
+                                           title="Engineering Lead", description=TEXT))
+    keep, other = (row[0] for row in conn.execute("SELECT id FROM jobs ORDER BY id"))
+    conn.execute("INSERT INTO job_reviews (job_id, decision) VALUES (%s, 'interested')", (other,))
+    pin_posting(conn, ashby, "acme:2a3b", keep)
+    assert conn.execute("SELECT id FROM jobs").fetchall() == [(keep,)]
+    assert conn.execute("SELECT job_id, decision FROM job_reviews").fetchall() == [(keep, "interested")]
+    # Pinning again, or pinning an advert not stored yet, changes nothing else.
+    pin_posting(conn, ashby, "acme:2a3b", keep)
+    pin_posting(conn, ashby, "acme:later", keep)
+    assert count(conn, "SELECT count(*) FROM job_links") == 2
+    assert count(conn, "SELECT count(*) FROM jobs") == 1
