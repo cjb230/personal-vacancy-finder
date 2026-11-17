@@ -16,13 +16,16 @@ _COMPANY_SUFFIXES = {
 }
 
 # Brands that are one employer under different names, keyed by normalised name. The value is
-# the key they all share: Docplanner trades as ZnanyLekarz in Poland, MioDottore in Italy and
-# Jameda in Germany, and TuoTempo is its scheduling product.
+# the key they all share: Docplanner trades as ZnanyLekarz in Poland, MioDottore in Italy,
+# Jameda in Germany and Doctoralia in Spain and Latin America, and TuoTempo is its scheduling
+# product.
 _COMPANY_ALIASES = {
     "znanylekarz": "docplanner",
     "tuotempo": "docplanner",
     "miodottore": "docplanner",
     "jameda": "docplanner",
+    "doctoralia": "docplanner",
+    "doctoraliamexico": "docplanner",
 }
 
 # Words that vary between adverts for the same role.
