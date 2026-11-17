@@ -18,7 +18,9 @@ that run automatically if the job has none yet. Open jobs with no advert text ge
 (job_descriptions) before the job is rescored. Interested and Maybe Himalayas jobs whose
 employer's careers page isn't followed get an "Employer link" button: the Apply address James
 pastes starts following that page, whose adverts then override Himalayas' copies when scoring
-(matching.merge_employer_adverts). Served by the worker on WEB_PORT (8080), which
+(matching.merge_employer_adverts). Every job has an "Add link" button: the advert address
+James pastes is read as on /add and, once checked, pinned to that job whatever its title
+(job_links), so a better or newer copy of an advert joins the job already judged. Served by the worker on WEB_PORT (8080), which
 docker-compose publishes on 127.0.0.1 only.
 
 Run on its own with: python -m vacancy_finder.web
@@ -128,8 +130,12 @@ SELECT j.id, j.title, c.name, s.verdict, s.score, s.role_level, s.reasons, r.dec
        j.first_seen_at AT TIME ZONE %(tz)s, jc.closes_at AT TIME ZONE %(tz)s, jc.is_deadline,
        jc.closes_at < now(), r.applied_at AT TIME ZONE %(tz)s, r.application_dir,
        -- The open advert seen last, or for a job whose adverts have all gone, the last one.
+       -- An advert James pinned with Add link comes first: he added it as the better copy.
        (SELECT p.url FROM postings p WHERE p.job_id = j.id
-        ORDER BY p.closed_at IS NULL DESC, p.last_seen_at DESC LIMIT 1) AS url,
+        ORDER BY p.closed_at IS NULL DESC,
+                 EXISTS (SELECT 1 FROM job_links l WHERE l.source_id = p.source_id
+                         AND l.external_id = p.external_id AND l.job_id = j.id) DESC,
+                 p.last_seen_at DESC LIMIT 1) AS url,
        (SELECT string_agg(DISTINCT p.location_text, ' | ') FROM postings p
         WHERE p.job_id = j.id AND (p.closed_at IS NULL OR j.status = 'closed')) AS locations,
        -- An email alert is labelled by who sent it ("LinkedIn alert"), not as the inbox.
@@ -400,7 +406,8 @@ def render(view: str, q: str, page: int, seen: str = "", since: str = "",
     first seen {first_seen:%d %b %H:%M}{render_closing(closes_at, is_deadline, closed_already)}{
     render_confirmed(checkable, confirmed_at, ad_gone_at, last_seen) if view in CONFIRMED_VIEWS else ""}{
     render_describe(job_id, job_title, pasted, back) if lacks_text or pasted is not None else ""}{
-    render_employer_link(job_id, company, back) if ask_employer else ""}</div>
+    render_employer_link(job_id, company, back) if ask_employer else ""}{
+    render_add_link(job_id, job_title)}</div>
   <div class="reasons">{chips}</div>
   <form class="actions" method="post" action="/review">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -598,6 +605,24 @@ def render_employer_link(job_id: int, company: str | None, back: str) -> str:
             'placeholder="https://www.comeet.com/jobs/... or https://jobs.lever.co/...">'
             '<div class="buttons"><button formmethod="dialog" formnovalidate>Cancel</button>'
             '<button class="save">Save and check</button></div></form></dialog>')
+
+
+def render_add_link(job_id: int, title: str) -> str:
+    """The "Add link" button and its dialog: one box for another address of this job's advert
+    (a newer copy, or one on the employer's own careers page). It goes to the Add job check
+    form, and saving pins the advert to this job (add_job.save with job_id)."""
+    return (f'<button type="button" class="describe" title="Add another address for this advert"'
+            f' onclick="document.getElementById(\'link-{job_id}\').showModal()">Add link</button>'
+            f'<dialog class="popup" id="link-{job_id}">'
+            f'<form method="post" action="/add/read"><h3>Add link: {esc(title)}</h3>'
+            "<p>Paste another address of this job's advert, such as the employer's own careers "
+            "page. It is read as on Add job, and once you save it, it stays on this job even if "
+            "its title differs, and its address becomes the job's link.</p>"
+            f'<input type="hidden" name="job_id" value="{job_id}">'
+            '<input type="url" name="url" required aria-label="Advert address" '
+            'placeholder="https://jobs.ashbyhq.com/... or the employer\'s careers page">'
+            '<div class="buttons"><button formmethod="dialog" formnovalidate>Cancel</button>'
+            '<button class="save">Read the advert</button></div></form></dialog>')
 
 
 class EmployerLinkError(Exception):
@@ -1000,8 +1025,9 @@ to check, with a box for the description when the page couldn't be read.</p>
 <h3>Added lately</h3><ul>{rows}</ul>""")
 
 
-def render_add_form(draft: add_job.Draft) -> str:
-    """The details read from the advert, for James to check or complete before saving."""
+def render_add_form(draft: add_job.Draft, job_title: str | None = None) -> str:
+    """The details read from the advert, for James to check or complete before saving. With
+    draft.job_id (Add link), saving pins the advert to that job, titled job_title."""
     modes = "".join(f'<option value="{m}"{" selected" if m == draft.work_mode else ""}>'
                     f'{"Not stated" if m == "unknown" else m.capitalize()}</option>'
                     for m in add_job.WORK_MODES)
@@ -1016,11 +1042,19 @@ def render_add_form(draft: add_job.Draft) -> str:
                   "too</label>"
                   f'<input type="hidden" name="ats_kind" value="{esc(draft.ats[0])}">'
                   f'<input type="hidden" name="ats_slug" value="{esc(draft.ats[1])}">')
-    return page("Add a job", f"""
-<h2>Add a job</h2>
+    heading, button = "Add a job", "Save and score"
+    linking = ""
+    if draft.job_id is not None:
+        heading, button = "Add a link", "Save link and rescore"
+        linking = (f"<p>This advert will be added to <strong>{esc(job_title or 'the job')}</strong>"
+                   " and stay on it, whatever its title.</p>"
+                   f'<input type="hidden" name="job_id" value="{draft.job_id}">')
+    return page(heading, f"""
+<h2>{heading}</h2>
 <p><a href="{esc(draft.url)}" target="_blank" rel="noopener">{esc(draft.url)}</a></p>
 {problem}{read_from}
-<form method="post" action="/add">
+<form method="post" action="/add">{linking}
+  <input type="hidden" name="feed_external_id" value="{esc(draft.feed_external_id)}">
   <input type="hidden" name="url" value="{esc(draft.url)}">
   <input type="hidden" name="external_id" value="{esc(draft.external_id)}">
   <input type="hidden" name="read_from" value="{esc(draft.read_from)}">
@@ -1033,19 +1067,34 @@ def render_add_form(draft: add_job.Draft) -> str:
   <label>Description <textarea name="description" rows="16" required
     placeholder="Paste the advert text here">{esc(draft.description)}</textarea></label>
   {follow}
-  <button>Save and score</button> <a href="/add">Cancel</a></form>""")
+  <button>{button}</button> <a href="{"/" if draft.job_id is not None else "/add"}">Cancel</a></form>""")
 
 
 def read_added(form: dict[str, list[str]]) -> tuple[HTTPStatus, str]:
     url = form.get("url", [""])[0].strip()
+    job_id = form_job_id(form)
     try:
         with connect() as conn, add_client() as client:
-            draft = add_job.read(url, conn, client)
+            job_title = None
+            if job_id is not None:
+                row = conn.execute("SELECT title FROM jobs WHERE id = %s", (job_id,)).fetchone()
+                if row is None:
+                    raise ValueError("That job is no longer stored, so the link can't be added to it.")
+                job_title = row[0]
+            draft = add_job.read(url, conn, client, job_id)
     except ValueError as exc:
         return HTTPStatus.BAD_REQUEST, render_add(f'<p class="problem">{esc(exc)}</p>', url)
-    log.info("Add job: read %s from %s%s", draft.url, draft.read_from or "nowhere",
-             f" ({draft.problem})" if draft.problem else "")
-    return HTTPStatus.OK, render_add_form(draft)
+    log.info("Add %s: read %s from %s%s", f"link to job {job_id}" if job_id else "job", draft.url,
+             draft.read_from or "nowhere", f" ({draft.problem})" if draft.problem else "")
+    return HTTPStatus.OK, render_add_form(draft, job_title)
+
+
+def form_job_id(form: dict[str, list[str]]) -> int | None:
+    """The job an Add link form is for, or None on the plain Add job form."""
+    try:
+        return int(form.get("job_id", [""])[0])
+    except ValueError:
+        return None
 
 
 def draft_from_form(form: dict[str, list[str]]) -> add_job.Draft:
@@ -1057,7 +1106,8 @@ def draft_from_form(form: dict[str, list[str]]) -> add_job.Draft:
         url=url, external_id=field("external_id").strip()[:500] or add_job.canonical_url(url),
         title=field("title"), company=field("company"), location=field("location"),
         work_mode=field("work_mode"), description=field("description"),
-        extra=add_job.extra_from_json(field("extra")), ats=ats, read_from=field("read_from")[:100])
+        extra=add_job.extra_from_json(field("extra")), ats=ats, read_from=field("read_from")[:100],
+        feed_external_id=field("feed_external_id").strip()[:500], job_id=form_job_id(form))
 
 
 def save_added(form: dict[str, list[str]]) -> tuple[HTTPStatus, str]:
@@ -1080,9 +1130,15 @@ def save_added(form: dict[str, list[str]]) -> tuple[HTTPStatus, str]:
         return HTTPStatus.BAD_REQUEST, render_add_form(draft)
     scored = f"{verdict} ({score})" if verdict else "unscored"
     log.info("Added job %d by hand (%s): %s, now %s", saved.job_id, draft.url,
+             "linked by hand" if saved.linked else
              "joined an existing job" if saved.joined else "new job", scored)
-    where = "It joined a job already found elsewhere." if saved.joined else "It is a new job."
     view = decision if decision in VIEWS else verdict if verdict in VIEWS else "match"
+    if saved.linked:
+        back = f'/?{urlencode({"view": view})}#job-{saved.job_id}'
+        return HTTPStatus.OK, page("Link added", f"""<h2>Link added</h2>
+<p>The advert is now part of this job. Scored {esc(scored)}. <a href="{esc(back)}">Back to the list</a></p>
+{f"<p>{esc(saved.followed)}</p>" if saved.followed else ""}""")
+    where = "It joined a job already found elsewhere." if saved.joined else "It is a new job."
     link = f'/?{urlencode({"view": view, "q": saved.title[:100]})}'
     return HTTPStatus.OK, page("Job added", f"""<h2>Added {esc(saved.title)}</h2>
 <p>{where} Scored {esc(scored)}. <a href="{esc(link)}">Show it in the list</a></p>
