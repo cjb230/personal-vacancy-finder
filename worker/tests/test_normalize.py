@@ -21,6 +21,14 @@ def test_polish_legal_forms_and_country_subsidiaries_are_dropped():
     assert normalize_company("Capgemini Invent") != normalize_company("Capgemini")
 
 
+def test_mexican_legal_form_is_dropped():
+    names = ["Doctoralia México S.A. de C.V.", "Doctoralia Mexico SA de CV",
+             "Doctoralia México, S.A.de C.V.", "Doctoralia México"]
+    assert {normalize_company(n) for n in names} == {normalize_company("Docplanner")}
+    assert normalize_company("Acme S.A. de C.V.") == "acme"
+    assert normalize_company("Casa de") == "casade"  # a plain "de" is kept
+
+
 def test_spacing_does_not_matter():
     assert normalize_company("Duck Duck Go") == normalize_company("DuckDuckGo")
 
