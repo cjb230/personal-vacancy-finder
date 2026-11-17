@@ -68,7 +68,7 @@ docker compose exec worker python -m vacancy_finder.big_names --check
 ## How data is stored
 
 - A **posting** is one advert on one source, unique by `(source, external_id)`.
-- A **job** is the real vacancy behind one or more postings. Postings with the same normalized company name and title share a job, so a role advertised on three boards is counted once.
+- A **job** is the real vacancy behind one or more postings. Postings with the same normalized company name and title share a job, so a role advertised on three boards is counted once. Brands of one employer can be listed in `_COMPANY_ALIASES` in `worker/src/vacancy_finder/normalize.py` to count as one company: TuoTempo, MioDottore and Jameda are all ZnanyLekarz. Changing it needs a rebuild, and the worker merges the stored rows on its next start.
 - A posting that disappears from its source after a successful run gets `closed_at` set. A job closes when none of its postings is open.
 - After every successful source check, jobs marked interested or applied are re-confirmed against the sources that list every current advert (ATS feeds, careers pages, job boards). When none of those adverts is open any more, `job_reviews.ad_gone_at` is set: an interested job moves to the **Missed** tab, an applied job stays applied and shows "advert gone". If an advert comes back, both are undone. Email alerts only announce adverts, so they can't confirm one is still up or show it has gone: a job known only from alerts is marked "email alerts only" and left alone. Matches, Interested, Applied and Missed jobs show when an advert was last confirmed.
 - Every collector run is logged in `collection_runs`, with counts and any error.

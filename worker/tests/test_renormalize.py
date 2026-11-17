@@ -50,6 +50,27 @@ def test_old_keys_are_merged(conn):  # noqa: F811
     assert renormalize(conn) == (0, 0)  # nothing left to do
 
 
+def test_aliases_merge_under_the_main_brand(conn):  # noqa: F811
+    source = ensure_source(conn, "test", "Test", "board")
+    for i, company in enumerate(["Jameda", "MioDottore", "ZnanyLekarz", "TuoTempo"]):
+        upsert_posting(conn, source, posting(str(i), company))
+    conn.commit()
+    assert count(conn, "SELECT count(*) FROM companies") == 1  # already one key on insert
+    # Simulate rows written before the aliases existed: one company per brand.
+    conn.execute("DELETE FROM companies WHERE id NOT IN (SELECT company_id FROM jobs)")
+    conn.execute("UPDATE companies SET name = 'Jameda', normalized_name = 'jameda'")
+    for name in ["MioDottore", "ZnanyLekarz", "TuoTempo"]:
+        conn.execute("INSERT INTO companies (name, normalized_name) VALUES (%s, lower(%s))",
+                     (name, name))
+    conn.commit()
+
+    assert renormalize(conn)[0] == 3
+    assert conn.execute("SELECT name, normalized_name FROM companies").fetchall() == [
+        ("ZnanyLekarz", "znanylekarz")
+    ]
+    assert renormalize(conn) == (0, 0)
+
+
 def test_unknown_company_and_placeholder_titles_stay_separate(conn):  # noqa: F811
     source = ensure_source(conn, "test", "Test", "board")
     upsert_posting(conn, source, posting("1", "(unknown)"))
