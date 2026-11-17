@@ -31,7 +31,7 @@ def test_company_accents_are_folded():
 
 def test_company_aliases_share_one_key():
     names = ["Docplanner", "ZnanyLekarz", "TuoTempo", "MioDottore", "Jameda GmbH",
-             "Znany Lekarz Sp. z o.o."]
+             "Znany Lekarz Sp. z o.o.", "Doctoralia México", "Doctoralia"]
     assert {normalize_company(n) for n in names} == {"docplanner"}
     assert job_fingerprint("Jameda", "Engineering Manager") == job_fingerprint(
         "Docplanner", "Engineering Manager")
